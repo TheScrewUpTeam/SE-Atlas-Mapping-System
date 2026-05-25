@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<Definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<LCDTextures>
+<LCDTextureDefinition>
+<Id>
+<TypeId>LCDTextureDefinition</TypeId>
+<SubtypeId>AMS Poster 1</SubtypeId>
+</Id>
+<TexturePath>Textures\Models\Poster1.dds</TexturePath>
+</LCDTextureDefinition>
+<LCDTextureDefinition>
+<Id>
+<TypeId>LCDTextureDefinition</TypeId>
+<SubtypeId>AMS Poster 2</SubtypeId>
+</Id>
+<TexturePath>Textures\Models\Poster2.dds</TexturePath>
+</LCDTextureDefinition>
+</LCDTextures>
+</Definitions>

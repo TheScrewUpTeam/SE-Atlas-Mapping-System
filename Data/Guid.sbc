@@ -1,0 +1,15 @@
+<Definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <EntityComponents>
+    <EntityComponent xsi:type="MyObjectBuilder_ModStorageComponentDefinition">
+      <Id>
+        <TypeId>ModStorageComponent</TypeId>
+        <SubtypeId>AtlasMappingSystem</SubtypeId>
+      </Id>
+      <RegisteredStorageGuids>
+        <guid>8E373F26-3C72-4742-87C2-79013A63A294</guid>
+        <guid>A7373F26-3C72-4742-87C2-79013A63A295</guid>
+        <guid>B7373F26-3C72-4742-87C2-79013A63A296</guid>
+      </RegisteredStorageGuids>
+    </EntityComponent>
+  </EntityComponents>
+</Definitions>
