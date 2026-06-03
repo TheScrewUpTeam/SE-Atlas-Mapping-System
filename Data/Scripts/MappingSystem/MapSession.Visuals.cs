@@ -39,17 +39,6 @@ namespace TSUT.MappingSystem
         public void AddScanVisual(Vector3D position, float radius, int durationTicks, long antennaId = 0)
         {
             _activeVisuals.Add(new ScanVisual(position, radius, durationTicks, antennaId));
-
-            if (antennaId != 0)
-            {
-                var entity = MyAPIGateway.Entities.GetEntityById(antennaId);
-                var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
-                if (entry != null)
-                {
-                    entry.IsScanning = true;
-                    (entity as IMyTerminalBlock)?.RefreshCustomInfo();
-                }
-            }
         }
 
         public void StopVisualForAntenna(long antennaId)
@@ -126,16 +115,6 @@ namespace TSUT.MappingSystem
 
                 if (done)
                 {
-                    if (visual.AntennaId != 0)
-                    {
-                        var entity = MyAPIGateway.Entities.GetEntityById(visual.AntennaId);
-                        var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
-                        if (entry != null)
-                        {
-                            entry.IsScanning = false;
-                            (entity as IMyTerminalBlock)?.RefreshCustomInfo();
-                        }
-                    }
                     _activeVisuals.RemoveAt(i);
                 }
             }

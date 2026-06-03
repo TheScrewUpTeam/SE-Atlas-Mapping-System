@@ -10,11 +10,11 @@ namespace TSUT.MappingSystem
     [ProtoContract]
     [ProtoInclude(10, typeof(PacketScanRequest))]
     [ProtoInclude(11, typeof(PacketChunkSync))]
-    [ProtoInclude(12, typeof(PacketScanVisual))]
+    [ProtoInclude(12, typeof(PacketScanStarted))]
     [ProtoInclude(13, typeof(PacketExchangeRequest))]
-    [ProtoInclude(14, typeof(PacketScanState))]
-    [ProtoInclude(15, typeof(PacketScanStart))]
-    [ProtoInclude(16, typeof(PacketScanResults))]
+    [ProtoInclude(14, typeof(PacketScanEnded))]
+    [ProtoInclude(15, typeof(PacketScanApproved))]
+    [ProtoInclude(16, typeof(PacketScanBatch))]
     [ProtoInclude(17, typeof(PacketNotification))]
     [ProtoInclude(18, typeof(PacketHolotableSync))]
     [ProtoInclude(19, typeof(PacketDisplaySync))]
@@ -24,21 +24,24 @@ namespace TSUT.MappingSystem
         public abstract void Handle(ulong senderId);
     }
 
+    // Server → requester only: start raycasting
     [ProtoContract]
-    public class PacketScanStart : PacketBase
+    public class PacketScanApproved : PacketBase
     {
         [ProtoMember(1)] public long EntityId;
         [ProtoMember(2)] public VRageMath.Vector3D Position;
         [ProtoMember(3)] public float Radius;
         [ProtoMember(4)] public int TotalRays;
+        [ProtoMember(5)] public int ScanId;
 
-        public PacketScanStart() { }
-        public PacketScanStart(long entityId, VRageMath.Vector3D pos, float radius, int totalRays)
+        public PacketScanApproved() { }
+        public PacketScanApproved(long entityId, VRageMath.Vector3D pos, float radius, int totalRays, int scanId)
         {
             EntityId = entityId;
             Position = pos;
             Radius = radius;
             TotalRays = totalRays;
+            ScanId = scanId;
         }
 
         public override void Handle(ulong senderId)
@@ -47,29 +50,87 @@ namespace TSUT.MappingSystem
         }
     }
 
+    // Server → ALL: scan started, drives UI state + visual on all clients
     [ProtoContract]
-    public class PacketScanResults : PacketBase
+    public class PacketScanStarted : PacketBase
     {
         [ProtoMember(1)] public long EntityId;
-        [ProtoMember(2)] public List<CellResult> Results;
-        [ProtoMember(3)] public int CurrentRayIndex;
+        [ProtoMember(2)] public VRageMath.Vector3D Position;
+        [ProtoMember(3)] public float Radius;
+        [ProtoMember(4)] public int TotalRays;
+        [ProtoMember(5)] public int DurationTicks;
+        [ProtoMember(6)] public int ScanId;
 
-        public PacketScanResults() { }
-        public PacketScanResults(long entityId, List<CellResult> results, int currentRayIndex)
+        public PacketScanStarted() { }
+        public PacketScanStarted(long entityId, VRageMath.Vector3D pos, float radius, int totalRays, int durationTicks, int scanId)
         {
             EntityId = entityId;
-            Results = results;
-            CurrentRayIndex = currentRayIndex;
+            Position = pos;
+            Radius = radius;
+            TotalRays = totalRays;
+            DurationTicks = durationTicks;
+            ScanId = scanId;
         }
 
         public override void Handle(ulong senderId)
         {
-            MapSession.Instance.Scheduler.ProcessScanResults(EntityId, Results, CurrentRayIndex);
+            var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
+            var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
+            entry?.UpdateScanStarted(ScanId, TotalRays);
+
+            MapSession.Instance.AddScanVisual(Position, Radius, DurationTicks, EntityId);
+        }
+    }
+
+    // Server → ALL: scan ended (complete or cancelled), clears UI state + visual
+    [ProtoContract]
+    public class PacketScanEnded : PacketBase
+    {
+        [ProtoMember(1)] public long EntityId;
+        [ProtoMember(2)] public int ScanId;
+
+        public PacketScanEnded() { }
+        public PacketScanEnded(long entityId, int scanId)
+        {
+            EntityId = entityId;
+            ScanId = scanId;
+        }
+
+        public override void Handle(ulong senderId)
+        {
+            var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
+            var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
+            entry?.UpdateScanEnded(ScanId);
+
+            MapSession.Instance.Scheduler?.CancelClientScan(EntityId);
+            MapSession.Instance?.StopVisualForAntenna(EntityId);
+        }
+    }
+
+    // Client → server: map data batch; server relays to others
+    [ProtoContract]
+    public class PacketScanBatch : PacketBase
+    {
+        [ProtoMember(1)] public long EntityId;
+        [ProtoMember(2)] public List<CellResult> Results;
+        [ProtoMember(3)] public int CurrentRayIndex;
+        [ProtoMember(4)] public bool IsFinal;
+
+        public PacketScanBatch() { }
+        public PacketScanBatch(long entityId, List<CellResult> results, int currentRayIndex, bool isFinal)
+        {
+            EntityId = entityId;
+            Results = results;
+            CurrentRayIndex = currentRayIndex;
+            IsFinal = isFinal;
+        }
+
+        public override void Handle(ulong senderId)
+        {
+            MapSession.Instance.Scheduler.ProcessScanBatch(EntityId, Results, CurrentRayIndex, IsFinal);
 
             if (MyAPIGateway.Session.IsServer)
-            {
                 MapSession.Instance.Networking.SendToOthers(this, senderId);
-            }
         }
     }
 
@@ -82,34 +143,46 @@ namespace TSUT.MappingSystem
     }
 
     [ProtoContract]
-    public class PacketScanState : PacketBase
+    public class PacketScanRequest : PacketBase
     {
         [ProtoMember(1)] public long EntityId;
-        [ProtoMember(2)] public bool IsScanning;
-        [ProtoMember(3)] public int CurrentRayIndex;
-        [ProtoMember(4)] public int TotalRays;
 
-        public PacketScanState() { }
-        public PacketScanState(long entityId, bool isScanning, int currentRay, int totalRays)
-        {
-            EntityId = entityId;
-            IsScanning = isScanning;
-            CurrentRayIndex = currentRay;
-            TotalRays = totalRays;
-        }
+        public PacketScanRequest() { }
+        public PacketScanRequest(long entityId) { EntityId = entityId; }
 
         public override void Handle(ulong senderId)
         {
+            if (!MyAPIGateway.Session.IsServer) return;
+
             var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
+            var antenna = entity as IMyRadioAntenna;
             var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
-            if (entry != null)
+
+            if (antenna != null && antenna.IsWorking && entry != null)
             {
-                entry.UpdateState(IsScanning, CurrentRayIndex, TotalRays);
-                if (!IsScanning)
-                {
-                    MapSession.Instance.Scheduler?.CancelClientScan(EntityId);
-                    MapSession.Instance?.StopVisualForAntenna(EntityId);
-                }
+                float radius = AntennaHelper.GetScanRadius(antenna);
+                MapSession.Instance.Scheduler.EnqueueScan(entity, radius, senderId);
+                MyLog.Default.WriteLine($"{Config.LogPrefix} Received ScanRequest from {senderId} for {EntityId}");
+            }
+        }
+    }
+
+    [ProtoContract]
+    public class PacketScanStopRequest : PacketBase
+    {
+        [ProtoMember(1)] public long EntityId;
+
+        public PacketScanStopRequest() { }
+        public PacketScanStopRequest(long entityId) { EntityId = entityId; }
+
+        public override void Handle(ulong senderId)
+        {
+            if (!MyAPIGateway.Session.IsServer) return;
+
+            if (MapSession.Instance.Scheduler?.GetActiveScan(EntityId) != null)
+            {
+                MapSession.Instance.Scheduler.CancelScanForAntenna(EntityId);
+                MapSession.Instance.Networking.SendToPlayer(new PacketNotification("Scan stopped.", 2000), senderId);
             }
         }
     }
@@ -152,80 +225,14 @@ namespace TSUT.MappingSystem
                 MapSession.Instance.Networking.SendToAll(new PacketChunkSync(TargetEntityId, targetStorage.Grid.GetSerializedChunks()));
                 MapSession.Instance.Networking.SendToPlayer(new PacketNotification("Data exchange complete.", 3000), senderId);
                 MyLog.Default.WriteLine($"{Config.LogPrefix} [Exchange] Sync sent to all, notification sent to {senderId}");
+
+                var targetAntenna = targetEntity as IMyRadioAntenna;
+                if (targetAntenna != null)
+                    MapSession.Instance.Contracts?.CheckCoverageForAntenna(targetAntenna);
             }
             else
             {
                 MyLog.Default.WriteLine($"{Config.LogPrefix} [Exchange] FAILED: sourceStorage={sourceStorage != null} targetStorage={targetStorage != null}");
-            }
-        }
-    }
-
-    [ProtoContract]
-    public class PacketScanVisual : PacketBase
-    {
-        [ProtoMember(1)] public VRageMath.Vector3D Position;
-        [ProtoMember(2)] public float Radius;
-        [ProtoMember(3)] public int DurationTicks;
-        [ProtoMember(4)] public long AntennaEntityId;
-
-        public PacketScanVisual() { }
-        public PacketScanVisual(VRageMath.Vector3D position, float radius, int durationTicks, long antennaEntityId)
-        {
-            Position = position;
-            Radius = radius;
-            DurationTicks = durationTicks;
-            AntennaEntityId = antennaEntityId;
-        }
-
-        public override void Handle(ulong senderId)
-        {
-            MapSession.Instance.AddScanVisual(Position, Radius, DurationTicks, AntennaEntityId);
-        }
-    }
-
-    [ProtoContract]
-    public class PacketScanRequest : PacketBase
-    {
-        [ProtoMember(1)] public long EntityId;
-
-        public PacketScanRequest() { }
-        public PacketScanRequest(long entityId) { EntityId = entityId; }
-
-        public override void Handle(ulong senderId)
-        {
-            if (!MyAPIGateway.Session.IsServer) return;
-            
-            var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
-            var antenna = entity as IMyRadioAntenna;
-            var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
-
-            if (antenna != null && antenna.IsWorking && entry != null)
-            {
-                float radius = AntennaHelper.GetScanRadius(antenna);
-                MapSession.Instance.Scheduler.EnqueueScan(entity, radius, senderId);
-                MyLog.Default.WriteLine($"{Config.LogPrefix} Received ScanRequest from {senderId} for {EntityId}");
-            }
-        }
-    }
-
-    [ProtoContract]
-    public class PacketScanStopRequest : PacketBase
-    {
-        [ProtoMember(1)] public long EntityId;
-
-        public PacketScanStopRequest() { }
-        public PacketScanStopRequest(long entityId) { EntityId = entityId; }
-
-        public override void Handle(ulong senderId)
-        {
-            if (!MyAPIGateway.Session.IsServer) return;
-
-            var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
-            var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
-            if (entry != null && entry.IsScanning)
-            {
-                MapSession.Instance.Scheduler?.CancelScanForAntenna(EntityId);
-                MapSession.Instance.Networking.SendToPlayer(new PacketNotification("Scan stopped.", 2000), senderId);
             }
         }
     }
@@ -350,9 +357,7 @@ namespace TSUT.MappingSystem
             {
                 var wrapper = MyAPIGateway.Utilities.SerializeFromBinary<PacketWrapper>(data);
                 if (wrapper != null && wrapper.Packet != null)
-                {
                     wrapper.Packet.Handle(wrapper.SenderId);
-                }
             }
             catch (Exception ex)
             {
@@ -372,12 +377,10 @@ namespace TSUT.MappingSystem
             var wrapper = new PacketWrapper { SenderId = MyAPIGateway.Multiplayer.MyId, Packet = packet };
             var data = MyAPIGateway.Utilities.SerializeToBinary(wrapper);
             MyAPIGateway.Multiplayer.SendMessageToOthers(_id, data);
-            
+
             // Local delivery if server
             if (MyAPIGateway.Session.IsServer)
-            {
                 packet.Handle(MyAPIGateway.Multiplayer.ServerId);
-            }
         }
 
         public void SendToPlayer(PacketBase packet, ulong playerId)
@@ -404,9 +407,7 @@ namespace TSUT.MappingSystem
             foreach (var player in players)
             {
                 if (player.SteamUserId != excludePlayerId && player.SteamUserId != MyAPIGateway.Multiplayer.MyId)
-                {
                     MyAPIGateway.Multiplayer.SendMessageTo(_id, data, player.SteamUserId);
-                }
             }
         }
     }

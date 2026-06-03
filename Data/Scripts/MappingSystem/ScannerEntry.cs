@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using Sandbox.Common.ObjectBuilders;
 using Sandbox.Game.EntityComponents;
@@ -80,20 +81,39 @@ namespace TSUT.MappingSystem
         private bool _clientIsScanning;
         private int _clientCurrentRay;
         private int _clientTotalRays;
+        private int _clientScanId;
+        private readonly HashSet<int> _deadScans = new HashSet<int>();
 
-        public void UpdateState(bool isScanning, int currentRay, int totalRays)
+        public void UpdateScanStarted(int scanId, int totalRays)
         {
-            bool stateChanged = _clientIsScanning != isScanning;
+            if (_deadScans.Contains(scanId))
+            {
+                _deadScans.Remove(scanId);
+                return;
+            }
 
-            _clientIsScanning = isScanning;
-            _clientCurrentRay = currentRay;
+            _clientScanId = scanId;
+            _clientIsScanning = true;
+            _clientCurrentRay = 0;
             _clientTotalRays = totalRays;
             _antenna?.SetDetailedInfoDirty();
             _antenna?.RefreshCustomInfo();
+            UpdateVisuals();
+        }
 
-            if (stateChanged)
+        public void UpdateScanEnded(int scanId)
+        {
+            if (_clientIsScanning && _clientScanId == scanId)
             {
+                _clientIsScanning = false;
+                _antenna?.SetDetailedInfoDirty();
+                _antenna?.RefreshCustomInfo();
                 UpdateVisuals();
+            }
+            else
+            {
+                // Started packet not yet arrived — record as dead so it won't resurrect scanning state
+                _deadScans.Add(scanId);
             }
         }
 
@@ -291,6 +311,8 @@ namespace TSUT.MappingSystem
                     MyLog.Default.WriteLine($"{Config.LogPrefix} [Exchange] Merged: target cells {cellsBefore} -> {cellsAfter}");
                     MapSession.Instance?.Networking.SendToAll(new PacketChunkSync(Entity.EntityId, targetStorage.Grid.GetSerializedChunks()));
                     MyAPIGateway.Utilities.ShowNotification("Data exchange complete.", 2000, MyFontEnum.Green);
+
+                    MapSession.Instance.Contracts?.CheckCoverageForAntenna(_antenna);
                 }
                 else
                 {

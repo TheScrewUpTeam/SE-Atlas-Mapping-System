@@ -271,10 +271,18 @@ namespace TSUT.MappingSystem
 
         private void OnScanCompleted(IMyRadioAntenna antenna)
         {
+            CheckCoverageForAntenna(antenna);
+        }
+
+        public void CheckCoverageForAntenna(IMyRadioAntenna antenna)
+        {
+            if (_system == null || _contracts.Count == 0) return;
+
             var storage = antenna.Components.Get<MapStorageComponent>();
             if (storage?.Grid == null) return;
 
             long ownerId = antenna.OwnerId;
+            bool anyChanged = false;
 
             foreach (var kvp in _contracts)
             {
@@ -295,7 +303,7 @@ namespace TSUT.MappingSystem
                         MyLog.Default.WriteLine($"{Config.LogPrefix} Contract {kvp.Key}: center still unknown, skipping coverage check");
                         continue;
                     }
-                    SaveToStorage();
+                    anyChanged = true;
                 }
 
                 if (meta.CoverageMet) continue;
@@ -304,9 +312,12 @@ namespace TSUT.MappingSystem
                 if (coverage < CoverageThreshold) continue;
 
                 meta.CoverageMet = true;
-                SaveToStorage();
+                anyChanged = true;
                 meta.Handler?.OnCoverageMet(kvp.Key, meta, GetSteamIdByIdentity(meta.ContractorIdentityId));
             }
+
+            if (anyChanged)
+                SaveToStorage();
         }
 
         private void OnFinishFor(long contractId, long identityId, int rewardeeCount)

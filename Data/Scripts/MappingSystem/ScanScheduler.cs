@@ -9,12 +9,20 @@ using VRageMath;
 
 namespace TSUT.MappingSystem
 {
+    public class ScanInfo
+    {
+        public IMyEntity Antenna;
+        public ulong PlayerId;
+        public int TotalRays;
+        public int ScanId;
+        public int CurrentRayIndex;
+    }
+
     public class ScanRequest
     {
         public IMyEntity Antenna;
         public Vector3D Position;
         public float Radius;
-        public ulong RequestingPlayer;
         public int CurrentRayIndex;
         public int TotalRays;
         public List<CellResult> BatchResults = new List<CellResult>();
@@ -25,37 +33,37 @@ namespace TSUT.MappingSystem
     {
         public event Action<IMyRadioAntenna> ScanCompleted;
 
-        private readonly List<ScanRequest> _activeScans = new List<ScanRequest>();
+        private readonly Dictionary<long, ScanInfo> _activeScans = new Dictionary<long, ScanInfo>();
         private readonly List<ScanRequest> _clientScans = new List<ScanRequest>();
+        private static int _nextScanId = 0;
         private const int VoxelCollisionLayer = 28;
         private int _ticks = 0;
 
-        public ScanRequest GetActiveScan(long antennaId)
+        public ScanInfo GetActiveScan(long antennaId)
         {
-            return _activeScans.Find(s => s.Antenna.EntityId == antennaId);
+            ScanInfo info;
+            return _activeScans.TryGetValue(antennaId, out info) ? info : null;
         }
 
         public void EnqueueScan(IMyEntity antenna, float radius, ulong playerId)
         {
-            // Only check if THIS antenna is already scanning
-            if (GetActiveScan(antenna.EntityId) != null) return;
+            if (_activeScans.ContainsKey(antenna.EntityId)) return;
 
             var terminalBlock = antenna as IMyTerminalBlock;
             if (terminalBlock == null || !terminalBlock.IsWorking) return;
 
             int rayCount = (int)MathHelper.Clamp((4 * Math.PI * radius * radius) / 100, 100, 5000000);
+            int scanId = ++_nextScanId;
+            int durationTicks = Math.Max(30, rayCount / Config.Instance.MaxRaycastsPerTick);
 
-            var request = new ScanRequest
+            _activeScans[antenna.EntityId] = new ScanInfo
             {
                 Antenna = antenna,
-                Position = antenna.WorldMatrix.Translation,
-                Radius = radius,
-                RequestingPlayer = playerId,
+                PlayerId = playerId,
                 TotalRays = rayCount,
+                ScanId = scanId,
                 CurrentRayIndex = 0
             };
-
-            _activeScans.Add(request);
 
             var entry = antenna.GameLogic?.GetAs<ScannerEntry>();
             if (entry != null)
@@ -65,23 +73,17 @@ namespace TSUT.MappingSystem
                 (antenna as IMyTerminalBlock)?.RefreshCustomInfo();
             }
 
-            var startPacket = new PacketScanStart(antenna.EntityId, request.Position, request.Radius, request.TotalRays);
+            var approvedPacket = new PacketScanApproved(antenna.EntityId, antenna.WorldMatrix.Translation, radius, rayCount, scanId);
             if (playerId == MyAPIGateway.Multiplayer.ServerId)
-            {
-                startPacket.Handle(MyAPIGateway.Multiplayer.ServerId);
-            }
+                approvedPacket.Handle(MyAPIGateway.Multiplayer.ServerId);
             else
-            {
-                // Send only to requester to avoid everyone raycasting at once
-                MapSession.Instance.Networking.SendToPlayer(startPacket, playerId);
-                MapSession.Instance.Networking.SendToAll(new PacketScanState(antenna.EntityId, true, 0, rayCount));
-            }
+                MapSession.Instance.Networking.SendToPlayer(approvedPacket, playerId);
 
-            int durationTicks = Math.Max(30, request.TotalRays / Config.Instance.MaxRaycastsPerTick);
-            MapSession.Instance.Networking.SendToAll(new PacketScanVisual(request.Position, request.Radius, durationTicks, antenna.EntityId));
+            MapSession.Instance.Networking.SendToAll(new PacketScanStarted(
+                antenna.EntityId, antenna.WorldMatrix.Translation, radius, rayCount, durationTicks, scanId));
         }
 
-        public void StartClientScan(long entityId, VRageMath.Vector3D pos, float radius, int totalRays)
+        public void StartClientScan(long entityId, Vector3D pos, float radius, int totalRays)
         {
             var entity = MyAPIGateway.Entities.GetEntityById(entityId);
             if (entity == null) return;
@@ -99,15 +101,13 @@ namespace TSUT.MappingSystem
             });
         }
 
-        public void ProcessScanResults(long entityId, List<CellResult> results, int currentRayIndex)
+        public void ProcessScanBatch(long entityId, List<CellResult> results, int currentRayIndex, bool isFinal)
         {
             var entity = MyAPIGateway.Entities.GetEntityById(entityId);
             if (entity == null) return;
 
             var storage = entity.Components.Get<MapStorageComponent>();
-            if (storage == null) return;
-
-            if (results != null && results.Count > 0)
+            if (storage != null && results != null && results.Count > 0)
             {
                 foreach (var result in results)
                 {
@@ -116,16 +116,16 @@ namespace TSUT.MappingSystem
                 }
                 storage.MarkDirty();
             }
-            
+
             if (MyAPIGateway.Session.IsServer)
             {
-                var scan = GetActiveScan(entityId);
-                if (scan != null)
+                ScanInfo info;
+                if (_activeScans.TryGetValue(entityId, out info))
                 {
-                    scan.CurrentRayIndex = currentRayIndex;
+                    info.CurrentRayIndex = currentRayIndex;
+                    if (isFinal)
+                        CompleteScan(entityId, info);
                 }
-                
-                MapSession.Instance.Networking.SendToAll(new PacketScanState(entityId, true, currentRayIndex, scan?.TotalRays ?? 0));
             }
         }
 
@@ -134,64 +134,65 @@ namespace TSUT.MappingSystem
             _ticks++;
 
             if (MyAPIGateway.Session.IsServer)
-            {
                 UpdateServer();
-            }
-            
+
             if (_clientScans.Count > 0)
-            {
                 UpdateClient();
-            }
         }
 
         private void UpdateServer()
         {
-            for (int i = _activeScans.Count - 1; i >= 0; i--)
+            var toCancel = new List<long>();
+            foreach (var kvp in _activeScans)
             {
-                var scan = _activeScans[i];
-                
-                var antenna = scan.Antenna as IMyRadioAntenna;
+                var antenna = kvp.Value.Antenna as IMyRadioAntenna;
                 if (antenna == null || !antenna.IsWorking)
-                {
-                    CancelScan(scan, i);
-                    continue;
-                }
-
-                if (scan.CurrentRayIndex >= scan.TotalRays)
-                {
-                    CompleteScan(scan, i);
-                }
+                    toCancel.Add(kvp.Key);
             }
+            foreach (var id in toCancel)
+                CancelScan(id);
         }
 
-        private void CancelScan(ScanRequest scan, int index)
+        private void CancelScan(long antennaId)
         {
-            var entry = scan.Antenna.GameLogic?.GetAs<ScannerEntry>();
+            ScanInfo info;
+            if (!_activeScans.TryGetValue(antennaId, out info)) return;
+
+            var entry = info.Antenna.GameLogic?.GetAs<ScannerEntry>();
             if (entry != null)
             {
                 entry.IsScanning = false;
                 entry.UpdateSink();
-                (scan.Antenna as IMyTerminalBlock)?.RefreshCustomInfo();
+                (info.Antenna as IMyTerminalBlock)?.RefreshCustomInfo();
             }
-            MapSession.Instance.Networking.SendToAll(new PacketScanState(scan.Antenna.EntityId, false, scan.CurrentRayIndex, scan.TotalRays));
-            _activeScans.RemoveAt(index);
+            _activeScans.Remove(antennaId);
+            MapSession.Instance.Networking.SendToAll(new PacketScanEnded(antennaId, info.ScanId));
+
+            var antenna = info.Antenna as IMyRadioAntenna;
+            if (antenna != null)
+                MapSession.Instance.Contracts?.CheckCoverageForAntenna(antenna);
         }
 
-        private void CompleteScan(ScanRequest scan, int index)
+        private void CompleteScan(long antennaId, ScanInfo info)
         {
-            var entry = scan.Antenna.GameLogic?.GetAs<ScannerEntry>();
+            var entry = info.Antenna.GameLogic?.GetAs<ScannerEntry>();
             if (entry != null)
             {
                 entry.IsScanning = false;
                 entry.UpdateSink();
-                (scan.Antenna as IMyTerminalBlock)?.RefreshCustomInfo();
+                (info.Antenna as IMyTerminalBlock)?.RefreshCustomInfo();
             }
-            MapSession.Instance.Networking.SendToAll(new PacketScanState(scan.Antenna.EntityId, false, scan.TotalRays, scan.TotalRays));
-            _activeScans.RemoveAt(index);
+            _activeScans.Remove(antennaId);
+            MapSession.Instance.Networking.SendToAll(new PacketScanEnded(antennaId, info.ScanId));
 
-            var antenna = scan.Antenna as IMyRadioAntenna;
+            var antenna = info.Antenna as IMyRadioAntenna;
             if (antenna != null)
                 ScanCompleted?.Invoke(antenna);
+        }
+
+        public void CancelScanForAntenna(long antennaId)
+        {
+            CancelScan(antennaId);
         }
 
         private void UpdateClient()
@@ -209,25 +210,42 @@ namespace TSUT.MappingSystem
                     casted++;
                 }
 
-                // Send batch every ~1s (60 ticks) or if finished
                 bool isFinished = scan.CurrentRayIndex >= scan.TotalRays;
                 if (_ticks - scan.LastBatchTick >= 60 || isFinished)
                 {
                     if (scan.BatchResults.Count > 0 || isFinished)
                     {
-                        var packet = new PacketScanResults(scan.Antenna.EntityId, scan.BatchResults, scan.CurrentRayIndex);
+                        var packet = new PacketScanBatch(scan.Antenna.EntityId, scan.BatchResults, scan.CurrentRayIndex, isFinished);
                         MapSession.Instance.Networking.SendToServer(packet);
-                        
                         scan.BatchResults = new List<CellResult>();
                         scan.LastBatchTick = _ticks;
                     }
 
                     if (isFinished)
                     {
-                        MyLog.Default.WriteLine($"{Config.LogPrefix} Client-side scan loop COMPLETED for {scan.Antenna.EntityId}");
-                        _clientScans.RemoveAt(i);
+                        MyLog.Default.WriteLine($"{Config.LogPrefix} Client scan completed for {scan.Antenna.EntityId}");
+                        // Guard: on listen server, SendToServer above delivers synchronously and
+                        // CancelClientScan may have already removed this entry via PacketScanEnded.
+                        if (i < _clientScans.Count && _clientScans[i] == scan)
+                            _clientScans.RemoveAt(i);
                     }
                 }
+            }
+        }
+
+        public void CancelClientScan(long antennaId)
+        {
+            for (int i = _clientScans.Count - 1; i >= 0; i--)
+            {
+                var scan = _clientScans[i];
+                if (scan.Antenna.EntityId != antennaId) continue;
+
+                if (scan.BatchResults.Count > 0)
+                {
+                    var packet = new PacketScanBatch(scan.Antenna.EntityId, scan.BatchResults, scan.CurrentRayIndex, false);
+                    MapSession.Instance.Networking.SendToServer(packet);
+                }
+                _clientScans.RemoveAt(i);
             }
         }
 
@@ -252,7 +270,6 @@ namespace TSUT.MappingSystem
             {
                 if (hit.HitEntity is IMyVoxelBase)
                 {
-                    var voxel = hit.HitEntity as IMyVoxelBase;
                     MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(hit.Position);
                     byte flags = 2;
                     short height = (short)hit.Position.Y;
@@ -264,7 +281,7 @@ namespace TSUT.MappingSystem
                     }
 
                     request.BatchResults.Add(new CellResult { Position = hit.Position, Height = height, Flags = flags });
-                    
+
                     if (storage != null)
                     {
                         MapCell cell = new MapCell { Height = height, Flags = flags };
@@ -279,30 +296,6 @@ namespace TSUT.MappingSystem
                     safetyCounter++;
                     if (Vector3D.DistanceSquared(origin, currentStart) >= request.Radius * request.Radius) break;
                 }
-            }
-        }
-
-        public void CancelScanForAntenna(long antennaId)
-        {
-            int index = _activeScans.FindIndex(s => s.Antenna.EntityId == antennaId);
-            if (index >= 0)
-                CancelScan(_activeScans[index], index);
-        }
-
-        public void CancelClientScan(long antennaId)
-        {
-            for (int i = _clientScans.Count - 1; i >= 0; i--)
-            {
-                var scan = _clientScans[i];
-                if (scan.Antenna.EntityId != antennaId) continue;
-
-                if (scan.BatchResults.Count > 0)
-                {
-                    var packet = new PacketScanResults(scan.Antenna.EntityId, scan.BatchResults, scan.CurrentRayIndex);
-                    MapSession.Instance.Networking.SendToServer(packet);
-                }
-
-                _clientScans.RemoveAt(i);
             }
         }
     }
