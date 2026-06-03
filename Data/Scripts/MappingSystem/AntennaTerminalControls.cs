@@ -23,23 +23,26 @@ namespace TSUT.MappingSystem
         static void RegisterAntennaActions()
         {
             var scanAction = MyAPIGateway.TerminalControls.CreateAction<IMyRadioAntenna>("AMS_ScanAction");
-            scanAction.Name = new StringBuilder("Start Map Scan");
+            scanAction.Name = new StringBuilder("Start/Stop scan");
             scanAction.Icon = @"Textures\GUI\Icons\Actions\Start.dds";
             scanAction.Action = (b) =>
             {
                 var entry = b.GameLogic?.GetAs<ScannerEntry>();
-                if (entry == null || entry.IsScanning || entry.IsPendingStatus) return;
-                entry.RequestScan();
+                if (entry == null) return;
+                if (entry.IsLocallyScanning)
+                    entry.RequestStopScan();
+                else
+                    entry.RequestScan();
             };
             scanAction.Writer = (b, sb) =>
             {
                 var entry = b.GameLogic?.GetAs<ScannerEntry>();
                 if (entry == null) return;
 
-                if (entry.IsScanning)
-                    sb.Append("Scanning...");
-                else if (entry.IsPendingStatus)
-                    sb.Append("Pending...");
+                if (entry.IsLocallyScanning)
+                {
+                    sb.Append("Stop scan");
+                }
                 else
                 {
                     float range = AntennaHelper.GetScanRadius(b as IMyRadioAntenna);
@@ -63,14 +66,23 @@ namespace TSUT.MappingSystem
                 var entry = b.GameLogic?.GetAs<ScannerEntry>();
                 entry?.RequestScan();
             };
-            scanButton.Enabled = (b) =>
-            {
-                var entry = b.GameLogic?.GetAs<ScannerEntry>();
-                return b.IsWorking && (entry == null || (!entry.IsScanning && !entry.IsPendingStatus));
-            };
-            scanButton.Visible = (b) => true;
+            scanButton.Enabled = (b) => b.IsWorking;
+            scanButton.Visible = (b) => !(b.GameLogic?.GetAs<ScannerEntry>()?.IsLocallyScanning ?? false);
             scanButton.SupportsMultipleBlocks = true;
             MyAPIGateway.TerminalControls.AddControl<IMyRadioAntenna>(scanButton);
+
+            var stopButton = MyAPIGateway.TerminalControls.CreateControl<IMyTerminalControlButton, IMyRadioAntenna>("AMS_StopScanButton");
+            stopButton.Title = MyStringId.GetOrCompute("Stop Scan");
+            stopButton.Tooltip = MyStringId.GetOrCompute("Stops the current scan in progress.");
+            stopButton.Action = (b) =>
+            {
+                var entry = b.GameLogic?.GetAs<ScannerEntry>();
+                entry?.RequestStopScan();
+            };
+            stopButton.Enabled = (b) => b.IsWorking;
+            stopButton.Visible = (b) => b.GameLogic?.GetAs<ScannerEntry>()?.IsLocallyScanning ?? false;
+            stopButton.SupportsMultipleBlocks = true;
+            MyAPIGateway.TerminalControls.AddControl<IMyRadioAntenna>(stopButton);
 
             var exchangeList = MyAPIGateway.TerminalControls.CreateControl<IMyTerminalControlListbox, IMyRadioAntenna>("AMS_ExchangeList");
             exchangeList.Title = MyStringId.GetOrCompute("Antenna to exchange");

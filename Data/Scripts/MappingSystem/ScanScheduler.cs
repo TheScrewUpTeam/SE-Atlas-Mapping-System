@@ -74,7 +74,7 @@ namespace TSUT.MappingSystem
             {
                 // Send only to requester to avoid everyone raycasting at once
                 MapSession.Instance.Networking.SendToPlayer(startPacket, playerId);
-                MapSession.Instance.Networking.SendToAll(new PacketScanState(antenna.EntityId, true, 0, rayCount, false, 0));
+                MapSession.Instance.Networking.SendToAll(new PacketScanState(antenna.EntityId, true, 0, rayCount));
             }
 
             int durationTicks = Math.Max(30, request.TotalRays / Config.Instance.MaxRaycastsPerTick);
@@ -282,6 +282,28 @@ namespace TSUT.MappingSystem
             }
         }
 
-        public bool IsPending(long antennaId) => false; // Queue removed
+        public void CancelScanForAntenna(long antennaId)
+        {
+            int index = _activeScans.FindIndex(s => s.Antenna.EntityId == antennaId);
+            if (index >= 0)
+                CancelScan(_activeScans[index], index);
+        }
+
+        public void CancelClientScan(long antennaId)
+        {
+            for (int i = _clientScans.Count - 1; i >= 0; i--)
+            {
+                var scan = _clientScans[i];
+                if (scan.Antenna.EntityId != antennaId) continue;
+
+                if (scan.BatchResults.Count > 0)
+                {
+                    var packet = new PacketScanResults(scan.Antenna.EntityId, scan.BatchResults, scan.CurrentRayIndex);
+                    MapSession.Instance.Networking.SendToServer(packet);
+                }
+
+                _clientScans.RemoveAt(i);
+            }
+        }
     }
 }

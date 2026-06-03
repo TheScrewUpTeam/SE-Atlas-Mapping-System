@@ -40,7 +40,7 @@ namespace TSUT.MappingSystem
             _zoom = MathHelper.Clamp(zoom, 1f, 500f);
         }
 
-        public void Draw(MatrixD antennaMatrix, bool isStatic, float heading, bool rotateMap, bool isScanning, bool isPending, string eta)
+        public void Draw(MatrixD antennaMatrix, bool isStatic, float heading, bool rotateMap, bool isScanning, string eta)
         {
             if (_surface == null) return;
 
@@ -57,7 +57,7 @@ namespace TSUT.MappingSystem
                 DrawTerrain(frame, context);
                 DrawMarkers(frame, context);
                 DrawUserIndicator(frame, context, antennaMatrix.Translation);
-                DrawStatus(frame, context, isScanning, isPending, eta);
+                DrawStatus(frame, context, isScanning, eta);
             }
         }
 
@@ -188,11 +188,11 @@ namespace TSUT.MappingSystem
             DrawIndicator(frame, indScreenPos, context.IsStatic, markerRotation);
         }
 
-        private void DrawStatus(MySpriteDrawFrame frame, RenderContext context, bool isScanning, bool isPending, string eta)
+        private void DrawStatus(MySpriteDrawFrame frame, RenderContext context, bool isScanning, string eta)
         {
-            if (isScanning || isPending)
+            if (isScanning)
             {
-                string statusText = isScanning ? "Scanning..." : "Pending...";
+                string statusText = "Scanning...";
                 var textSprite = new MySprite()
                 {
                     Type = SpriteType.TEXT,

@@ -17,6 +17,10 @@ namespace TSUT.MappingSystem
         public int FadeTicks = 30; // 0.5s
         public long AntennaId;
 
+        public bool IsStopped;
+        public float StoppedRadius;
+        public int FadeElapsedTicks;
+
         public ScanVisual(Vector3D position, float radius, int durationTicks, long antennaId = 0)
         {
             Position = position;
@@ -35,7 +39,7 @@ namespace TSUT.MappingSystem
         public void AddScanVisual(Vector3D position, float radius, int durationTicks, long antennaId = 0)
         {
             _activeVisuals.Add(new ScanVisual(position, radius, durationTicks, antennaId));
-            
+
             if (antennaId != 0)
             {
                 var entity = MyAPIGateway.Entities.GetEntityById(antennaId);
@@ -48,6 +52,21 @@ namespace TSUT.MappingSystem
             }
         }
 
+        public void StopVisualForAntenna(long antennaId)
+        {
+            for (int i = 0; i < _activeVisuals.Count; i++)
+            {
+                var visual = _activeVisuals[i];
+                if (visual.AntennaId != antennaId || visual.IsStopped) continue;
+
+                float progress = (float)visual.ElapsedTicks / visual.DurationTicks;
+                visual.StoppedRadius = progress <= 1.0f ? visual.MaxRadius * progress : visual.MaxRadius;
+                visual.IsStopped = true;
+                visual.FadeElapsedTicks = 0;
+                break;
+            }
+        }
+
         private void UpdateVisuals()
         {
             if (MyAPIGateway.Utilities.IsDedicated) return;
@@ -56,7 +75,6 @@ namespace TSUT.MappingSystem
             for (int i = _activeVisuals.Count - 1; i >= 0; i--)
             {
                 var visual = _activeVisuals[i];
-                visual.ElapsedTicks++;
 
                 if (visual.AntennaId != 0)
                 {
@@ -67,24 +85,37 @@ namespace TSUT.MappingSystem
                     }
                 }
 
-                float progress = (float)visual.ElapsedTicks / visual.DurationTicks;
                 float currentRadius;
                 float alpha;
+                bool done;
 
-                if (progress <= 1.0f)
+                if (visual.IsStopped)
                 {
-                    // Growth phase: 0 to MaxRadius
-                    currentRadius = visual.MaxRadius * progress;
-                    alpha = .75f; 
+                    visual.FadeElapsedTicks++;
+                    float fadeProgress = (float)visual.FadeElapsedTicks / visual.FadeTicks;
+                    currentRadius = visual.StoppedRadius;
+                    alpha = 0.75f * MathHelper.Clamp(1.0f - fadeProgress, 0f, 1f);
+                    done = visual.FadeElapsedTicks >= visual.FadeTicks;
                 }
                 else
                 {
-                    // Fade phase: Fixed MaxRadius, decreasing alpha
-                    currentRadius = visual.MaxRadius;
-                    float fadeProgress = (float)(visual.ElapsedTicks - visual.DurationTicks) / visual.FadeTicks;
-                    alpha = .75f * MathHelper.Clamp(1.0f - fadeProgress, 0f, 1f);
-                }
+                    visual.ElapsedTicks++;
+                    float progress = (float)visual.ElapsedTicks / visual.DurationTicks;
 
+                    if (progress <= 1.0f)
+                    {
+                        currentRadius = visual.MaxRadius * progress;
+                        alpha = 0.75f;
+                    }
+                    else
+                    {
+                        currentRadius = visual.MaxRadius;
+                        float fadeProgress = (float)(visual.ElapsedTicks - visual.DurationTicks) / visual.FadeTicks;
+                        alpha = 0.75f * MathHelper.Clamp(1.0f - fadeProgress, 0f, 1f);
+                    }
+
+                    done = visual.ElapsedTicks >= visual.DurationTicks + visual.FadeTicks;
+                }
 
                 if (alpha > 0)
                 {
@@ -93,7 +124,7 @@ namespace TSUT.MappingSystem
                     MySimpleObjectDraw.DrawTransparentSphere(ref matrix, currentRadius, ref color, MySimpleObjectRasterizer.Solid, 20, _material, _material, 0.05f);
                 }
 
-                if (visual.ElapsedTicks >= visual.DurationTicks + visual.FadeTicks)
+                if (done)
                 {
                     if (visual.AntennaId != 0)
                     {

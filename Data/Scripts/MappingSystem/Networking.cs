@@ -18,6 +18,7 @@ namespace TSUT.MappingSystem
     [ProtoInclude(17, typeof(PacketNotification))]
     [ProtoInclude(18, typeof(PacketHolotableSync))]
     [ProtoInclude(19, typeof(PacketDisplaySync))]
+    [ProtoInclude(20, typeof(PacketScanStopRequest))]
     public abstract class PacketBase
     {
         public abstract void Handle(ulong senderId);
@@ -87,18 +88,14 @@ namespace TSUT.MappingSystem
         [ProtoMember(2)] public bool IsScanning;
         [ProtoMember(3)] public int CurrentRayIndex;
         [ProtoMember(4)] public int TotalRays;
-        [ProtoMember(5)] public bool IsPending;
-        [ProtoMember(6)] public int WaitRays;
 
         public PacketScanState() { }
-        public PacketScanState(long entityId, bool isScanning, int currentRay, int totalRays, bool isPending = false, int waitRays = 0)
+        public PacketScanState(long entityId, bool isScanning, int currentRay, int totalRays)
         {
             EntityId = entityId;
             IsScanning = isScanning;
             CurrentRayIndex = currentRay;
             TotalRays = totalRays;
-            IsPending = isPending;
-            WaitRays = waitRays;
         }
 
         public override void Handle(ulong senderId)
@@ -107,7 +104,12 @@ namespace TSUT.MappingSystem
             var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
             if (entry != null)
             {
-                entry.UpdateState(IsScanning, CurrentRayIndex, TotalRays, IsPending, WaitRays);
+                entry.UpdateState(IsScanning, CurrentRayIndex, TotalRays);
+                if (!IsScanning)
+                {
+                    MapSession.Instance.Scheduler?.CancelClientScan(EntityId);
+                    MapSession.Instance?.StopVisualForAntenna(EntityId);
+                }
             }
         }
     }
@@ -202,6 +204,28 @@ namespace TSUT.MappingSystem
                 float radius = AntennaHelper.GetScanRadius(antenna);
                 MapSession.Instance.Scheduler.EnqueueScan(entity, radius, senderId);
                 MyLog.Default.WriteLine($"{Config.LogPrefix} Received ScanRequest from {senderId} for {EntityId}");
+            }
+        }
+    }
+
+    [ProtoContract]
+    public class PacketScanStopRequest : PacketBase
+    {
+        [ProtoMember(1)] public long EntityId;
+
+        public PacketScanStopRequest() { }
+        public PacketScanStopRequest(long entityId) { EntityId = entityId; }
+
+        public override void Handle(ulong senderId)
+        {
+            if (!MyAPIGateway.Session.IsServer) return;
+
+            var entity = MyAPIGateway.Entities.GetEntityById(EntityId);
+            var entry = entity?.GameLogic?.GetAs<ScannerEntry>();
+            if (entry != null && entry.IsScanning)
+            {
+                MapSession.Instance.Scheduler?.CancelScanForAntenna(EntityId);
+                MapSession.Instance.Networking.SendToPlayer(new PacketNotification("Scan stopped.", 2000), senderId);
             }
         }
     }

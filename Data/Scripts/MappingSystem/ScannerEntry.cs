@@ -20,7 +20,7 @@ namespace TSUT.MappingSystem
         private MyResourceSinkComponent _sink;
 
         public bool IsScanning { get; set; }
-        public bool IsPendingStatus => MyAPIGateway.Session.IsServer ? MapSession.Instance.Scheduler.IsPending(Entity.EntityId) : _clientIsPending;
+        public bool IsLocallyScanning => MyAPIGateway.Session.IsServer ? IsScanning : _clientIsScanning;
         public long SelectedExchangeEntityId = 0;
         public MapGrid Grid => _storage?.Grid;
 
@@ -78,20 +78,16 @@ namespace TSUT.MappingSystem
         }
 
         private bool _clientIsScanning;
-        private bool _clientIsPending;
         private int _clientCurrentRay;
         private int _clientTotalRays;
-        private int _clientWaitRays;
 
-        public void UpdateState(bool isScanning, int currentRay, int totalRays, bool isPending = false, int waitRays = 0)
+        public void UpdateState(bool isScanning, int currentRay, int totalRays)
         {
-            bool stateChanged = _clientIsScanning != isScanning || _clientIsPending != isPending;
+            bool stateChanged = _clientIsScanning != isScanning;
 
             _clientIsScanning = isScanning;
-            _clientIsPending = isPending;
             _clientCurrentRay = currentRay;
             _clientTotalRays = totalRays;
-            _clientWaitRays = waitRays;
             _antenna?.SetDetailedInfoDirty();
             _antenna?.RefreshCustomInfo();
 
@@ -113,14 +109,6 @@ namespace TSUT.MappingSystem
                 if (_clientCurrentRay < _clientTotalRays)
                 {
                     _clientCurrentRay = Math.Min(_clientTotalRays, _clientCurrentRay + raysPerUpdate);
-                    changed = true;
-                }
-            }
-            else if (_clientIsPending)
-            {
-                if (_clientWaitRays > 0)
-                {
-                    _clientWaitRays = Math.Max(0, _clientWaitRays - raysPerUpdate);
                     changed = true;
                 }
             }
@@ -150,48 +138,25 @@ namespace TSUT.MappingSystem
 
         public string GetScanETA()
         {
-            int remainingRays = 0;
+            int remainingRays;
             if (MyAPIGateway.Session.IsServer)
             {
                 var scheduler = MapSession.Instance.Scheduler;
                 if (scheduler == null) return "N/A";
 
                 var activeScan = scheduler.GetActiveScan(_antenna.EntityId);
-                if (activeScan != null)
-                {
-                    remainingRays = activeScan.TotalRays - activeScan.CurrentRayIndex;
-                }
-                else
-                {
-                    if (scheduler.IsPending(_antenna.EntityId))
-                    {
-                        remainingRays = 0; // ETA for pending is approximate; scheduler doesn't expose wait-ray count
-                    }
-                    else
-                    {
-                        return "N/A";
-                    }
-                }
+                if (activeScan == null) return "N/A";
+                remainingRays = activeScan.TotalRays - activeScan.CurrentRayIndex;
             }
             else
             {
-                if (_clientIsScanning)
-                {
-                    remainingRays = _clientTotalRays - _clientCurrentRay;
-                }
-                else if (_clientIsPending)
-                {
-                    remainingRays = _clientWaitRays + _clientTotalRays;
-                }
-                else
-                {
-                    return "N/A";
-                }
+                if (!_clientIsScanning) return "N/A";
+                remainingRays = _clientTotalRays - _clientCurrentRay;
             }
 
             int raysPerTick = Config.Instance.MaxRaycastsPerTick;
             int remainingTicks = (remainingRays + raysPerTick - 1) / raysPerTick;
-            
+
             int totalSeconds = (int)(remainingTicks / 60f);
             TimeSpan timeSpan = TimeSpan.FromSeconds(totalSeconds);
             return timeSpan.ToString(@"mm\:ss");
@@ -205,22 +170,11 @@ namespace TSUT.MappingSystem
             int capacity = storage?.GetCapacity() ?? 0;
             int cells = storage?.Grid?.CellCount ?? 0;
 
-            string status = "Idle";
             bool scanning = MyAPIGateway.Session.IsServer ? IsScanning : _clientIsScanning;
-            bool pending = false;
-
-            if (scanning)
-            {
-                status = "Scanning";
-            }
-            else
-            {
-                pending = MyAPIGateway.Session.IsServer ? MapSession.Instance.Scheduler.IsPending(_antenna.EntityId) : _clientIsPending;
-                if (pending) status = "Pending";
-            }
+            string status = scanning ? "Scanning" : "Idle";
 
             info.AppendLine($"Status: {status}");
-            info.AppendLine($"ETA: {(scanning || pending ? GetScanETA() : "N/A")}");
+            info.AppendLine($"ETA: {(scanning ? GetScanETA() : "N/A")}");
             info.AppendLine($"\nMap Scan Radius: {Math.Round(scanRadius)} m");
             info.AppendLine($"Map Data Stored:");
             info.AppendLine($"  Chunks: {chunks} / {capacity}");
@@ -268,11 +222,10 @@ namespace TSUT.MappingSystem
             }
 
             bool scanning = MyAPIGateway.Session.IsServer ? IsScanning : _clientIsScanning;
-            bool pending = MyAPIGateway.Session.IsServer ? MapSession.Instance.Scheduler.IsPending(Entity.EntityId) : _clientIsPending;
 
-            if (scanning || pending)
+            if (scanning)
             {
-                MyAPIGateway.Utilities.ShowNotification("Scan already in progress or pending.", 2000, MyFontEnum.Red);
+                MyAPIGateway.Utilities.ShowNotification("Scan already in progress.", 2000, MyFontEnum.Red);
                 return;
             }
 
@@ -289,6 +242,30 @@ namespace TSUT.MappingSystem
             {
                 MapSession.Instance.Networking.SendToServer(new PacketScanRequest(Entity.EntityId));
                 MyAPIGateway.Utilities.ShowNotification("Scan requested...", 2000, MyFontEnum.Green);
+            }
+        }
+
+        public void RequestStopScan()
+        {
+            if (MapSession.Instance?.Networking == null) return;
+
+            bool scanning = MyAPIGateway.Session.IsServer ? IsScanning : _clientIsScanning;
+
+            if (!scanning)
+            {
+                MyAPIGateway.Utilities.ShowNotification("No scan in progress.", 2000, MyFontEnum.Red);
+                return;
+            }
+
+            if (MyAPIGateway.Session.IsServer)
+            {
+                MapSession.Instance.Scheduler?.CancelScanForAntenna(Entity.EntityId);
+                MyAPIGateway.Utilities.ShowNotification("Scan stopped.", 2000, MyFontEnum.Green);
+            }
+            else
+            {
+                MapSession.Instance.Networking.SendToServer(new PacketScanStopRequest(Entity.EntityId));
+                MyAPIGateway.Utilities.ShowNotification("Stop requested...", 2000, MyFontEnum.Green);
             }
         }
 

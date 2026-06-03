@@ -161,10 +161,9 @@ namespace TSUT.MappingSystem
                         }
                     }
 
-                    bool isScanning = scannerEntry?.IsScanning ?? false;
-                    bool isPending = scannerEntry?.IsPendingStatus ?? false;
+                    bool isScanning = scannerEntry?.IsLocallyScanning ?? false;
                     string eta = scannerEntry?.GetScanETA() ?? "N/A";
-                    _renderer.Draw(m_block.WorldMatrix, isStatic, heading, rotateMap, isScanning, isPending, eta);
+                    _renderer.Draw(m_block.WorldMatrix, isStatic, heading, rotateMap, isScanning, eta);
                 }
                 else
                 {
