@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Sandbox.Game;
 using Sandbox.Game.Entities;
 using Sandbox.ModAPI;
 using VRage.Game;
@@ -36,6 +37,7 @@ namespace TSUT.MappingSystem
         public string ContractName;          // runtime only, not persisted
         public IMyGps SurveyGps;             // runtime only, not persisted
         public MappingContractHandler Handler; // runtime only, not persisted
+        public float LastKnownCoverage;      // runtime only, not persisted
     }
 
     public class MappingContractSystem
@@ -48,6 +50,7 @@ namespace TSUT.MappingSystem
 
         private readonly Dictionary<long, MappingContractMeta> _contracts = new Dictionary<long, MappingContractMeta>();
         private readonly HashSet<long> _spawnedIds = new HashSet<long>();
+        private readonly Dictionary<long, List<KeyValuePair<long, int>>> _questlogLines = new Dictionary<long, List<KeyValuePair<long, int>>>();
 
         private readonly List<MappingContractHandler> _handlers = new List<MappingContractHandler>
         {
@@ -284,6 +287,7 @@ namespace TSUT.MappingSystem
             SaveSpawnedIds();
             SaveToStorage();
             MyLog.Default.WriteLine($"{Config.LogPrefix} Contract {contractId} accepted by {identityId}");
+            RefreshQuestlog(identityId);
 
             ulong steamId = GetSteamIdByIdentity(identityId);
             if (steamId != 0)
@@ -321,18 +325,28 @@ namespace TSUT.MappingSystem
                 if (storage?.Grid == null) continue;
 
                 float fresh = ComputeFreshCoverageFromGrid(meta, storage.Grid);
-                if (fresh < CoverageThreshold) continue;
+                bool progressChanged = fresh - meta.LastKnownCoverage >= 0.05f;
+                if (fresh > meta.LastKnownCoverage)
+                    meta.LastKnownCoverage = fresh;
 
-                meta.CoverageMet = true;
-                anyChanged = true;
-                ulong steamId = GetSteamIdByIdentity(meta.ContractorIdentityId);
-                meta.Handler?.OnCoverageMet(kvp.Key, meta, steamId);
+                if (fresh >= CoverageThreshold)
+                {
+                    meta.CoverageMet = true;
+                    anyChanged = true;
+                    ulong steamId = GetSteamIdByIdentity(meta.ContractorIdentityId);
+                    meta.Handler?.OnCoverageMet(kvp.Key, meta, steamId);
 
-                // Sync updated CoverageMet to client
-                if (steamId != 0)
-                    MapSession.Instance.Networking.SendToPlayer(
-                        new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, true, meta.ContractName),
-                        steamId);
+                    // Sync updated CoverageMet to client
+                    if (steamId != 0)
+                        MapSession.Instance.Networking.SendToPlayer(
+                            new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, true, meta.ContractName),
+                            steamId);
+                    UpdateQuestlogLine(kvp.Key, meta);
+                }
+                else if (progressChanged)
+                {
+                    UpdateQuestlogLine(kvp.Key, meta);
+                }
             }
 
             if (anyChanged) SaveToStorage();
@@ -356,6 +370,7 @@ namespace TSUT.MappingSystem
                     new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet, meta.ContractName),
                     steamId);
             }
+            RefreshQuestlog(identityId);
         }
 
         private float ComputeFreshCoverage(MappingContractMeta meta, IMyPlayer contractor)
@@ -472,6 +487,8 @@ namespace TSUT.MappingSystem
                     MapSession.Instance.Networking.SendToPlayer(new PacketContractEnded(contractId), steamId);
             }
             _contracts.Remove(contractId);
+            if (meta != null)
+                RefreshQuestlog(meta.ContractorIdentityId);
             SaveToStorage();
         }
 
@@ -493,6 +510,58 @@ namespace TSUT.MappingSystem
                 string msg = $"Survey synced! +{meta.MoneyReward} cr, +{meta.ReputationReward} rep to [{meta.FactionTag}]";
                 MapSession.Instance.Networking.SendToPlayer(new PacketNotification(msg, 8000), contractorSteamId);
             }
+        }
+
+        // ── Questlog ──────────────────────────────────────────────────────────────
+
+        private void RefreshQuestlog(long identityId)
+        {
+            var playerContracts = new List<KeyValuePair<long, MappingContractMeta>>();
+            foreach (var kvp in _contracts)
+                if (kvp.Value.ContractorIdentityId == identityId)
+                    playerContracts.Add(kvp);
+
+            if (playerContracts.Count == 0)
+            {
+                MyVisualScriptLogicProvider.SetQuestlog(false, "", identityId);
+                _questlogLines.Remove(identityId);
+                return;
+            }
+
+            MyVisualScriptLogicProvider.SetQuestlog(true, "Survey Contracts", identityId);
+
+            var lineMapping = new List<KeyValuePair<long, int>>();
+            for (int i = 0; i < playerContracts.Count; i++)
+            {
+                var meta = playerContracts[i].Value;
+                string status = meta.CoverageMet ? "Return to station!" : $"{(int)(meta.LastKnownCoverage * 100)}%";
+                MyVisualScriptLogicProvider.AddQuestlogObjective($"{meta.ContractName} – {status}", false, false, identityId);
+                lineMapping.Add(new KeyValuePair<long, int>(playerContracts[i].Key, i));
+            }
+
+            _questlogLines[identityId] = lineMapping;
+
+            for (int i = 0; i < playerContracts.Count; i++)
+                if (playerContracts[i].Value.CoverageMet)
+                    MyVisualScriptLogicProvider.SetQuestlogDetailCompleted(i, true, identityId);
+        }
+
+        private void UpdateQuestlogLine(long contractId, MappingContractMeta meta)
+        {
+            List<KeyValuePair<long, int>> lines;
+            if (!_questlogLines.TryGetValue(meta.ContractorIdentityId, out lines))
+                return;
+
+            int lineIndex = -1;
+            foreach (var entry in lines)
+                if (entry.Key == contractId) { lineIndex = entry.Value; break; }
+            if (lineIndex < 0) return;
+
+            string status = meta.CoverageMet ? "Return to station!" : $"{(int)(meta.LastKnownCoverage * 100)}%";
+            MyVisualScriptLogicProvider.ReplaceQuestlogDetail(lineIndex, $"{meta.ContractName} – {status}", false, meta.ContractorIdentityId);
+
+            if (meta.CoverageMet)
+                MyVisualScriptLogicProvider.SetQuestlogDetailCompleted(lineIndex, true, meta.ContractorIdentityId);
         }
 
         // ── Helpers (internal so contract handlers can call them) ─────────────────
