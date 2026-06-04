@@ -55,6 +55,7 @@ namespace TSUT.MappingSystem
             gps.GPSColor = new Color(255, 140, 0);
             MyAPIGateway.Session.GPS.AddGps(meta.ContractorIdentityId, gps);
             meta.SurveyGps = gps;
+            meta.SurveyGpsHash = gps.Hash;
         }
 
         protected static void AddZoneGps(MappingContractMeta meta)
@@ -68,13 +69,31 @@ namespace TSUT.MappingSystem
             gps.GPSColor = new Color(255, 140, 0);
             MyAPIGateway.Session.GPS.AddGps(meta.ContractorIdentityId, gps);
             meta.SurveyGps = gps;
+            meta.SurveyGpsHash = gps.Hash;
         }
 
         protected static void RemoveGps(MappingContractMeta meta)
         {
-            if (meta.SurveyGps == null) return;
-            MyAPIGateway.Session.GPS.RemoveGps(meta.ContractorIdentityId, meta.SurveyGps);
-            meta.SurveyGps = null;
+            if (meta.SurveyGps != null)
+            {
+                MyAPIGateway.Session.GPS.RemoveGps(meta.ContractorIdentityId, meta.SurveyGps);
+                meta.SurveyGps = null;
+                meta.SurveyGpsHash = 0;
+                return;
+            }
+            if (meta.SurveyGpsHash != 0)
+            {
+                var gpsList = MyAPIGateway.Session.GPS.GetGpsList(meta.ContractorIdentityId);
+                foreach (var gps in gpsList)
+                {
+                    if (gps.Hash == meta.SurveyGpsHash)
+                    {
+                        MyAPIGateway.Session.GPS.RemoveGps(meta.ContractorIdentityId, gps);
+                        break;
+                    }
+                }
+                meta.SurveyGpsHash = 0;
+            }
         }
     }
 }

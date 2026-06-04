@@ -31,6 +31,7 @@ namespace TSUT.MappingSystem
         public int MoneyReward;
         public int ReputationReward;
         public string FactionTag;
+        public int SurveyGpsHash;            // persisted, 0 = none
         public IMyGps SurveyGps;             // runtime only, not persisted
         public MappingContractHandler Handler; // runtime only, not persisted
     }
@@ -564,7 +565,7 @@ namespace TSUT.MappingSystem
                     var m = kvp.Value;
                     sb.Append($"{kvp.Key}:{m.Center.X:R},{m.Center.Y:R},{m.Center.Z:R}," +
                               $"{m.StationCenter.X:R},{m.StationCenter.Y:R},{m.StationCenter.Z:R}," +
-                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.MoneyReward},{m.ReputationReward},{m.AcceptedTicks};");
+                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.MoneyReward},{m.ReputationReward},{m.AcceptedTicks},{m.SurveyGpsHash};");
                 }
                 MyAPIGateway.Utilities.SetVariable(StorageKey, sb.ToString());
             }
@@ -630,7 +631,7 @@ namespace TSUT.MappingSystem
                     if (!long.TryParse(entry.Substring(0, colon), out contractId)) continue;
 
                     var parts = entry.Substring(colon + 1).Split(',');
-                    if (parts.Length != 5 && parts.Length != 8 && parts.Length != 11 && parts.Length != 12) continue;
+                    if (parts.Length != 5 && parts.Length != 8 && parts.Length != 11 && parts.Length != 12 && parts.Length != 13) continue;
 
                     double cx, cy, cz;
                     if (!double.TryParse(parts[0], out cx) ||
@@ -644,6 +645,7 @@ namespace TSUT.MappingSystem
                     bool coverageMet = false;
                     int moneyReward = 0, repReward = 0;
                     long acceptedTicks = 0;
+                    int gpsHash = 0;
 
                     if (parts.Length == 5)
                     {
@@ -664,7 +666,7 @@ namespace TSUT.MappingSystem
                         moneyReward   = mr;
                         repReward     = rr;
                     }
-                    else // 11 or 12
+                    else // 11, 12, or 13
                     {
                         double scx, scy, scz;
                         int cm, mr, rr;
@@ -680,10 +682,15 @@ namespace TSUT.MappingSystem
                         coverageMet   = cm != 0;
                         moneyReward   = mr;
                         repReward     = rr;
-                        if (parts.Length == 12)
+                        if (parts.Length >= 12)
                         {
                             long at;
                             if (long.TryParse(parts[11], out at)) acceptedTicks = at;
+                        }
+                        if (parts.Length >= 13)
+                        {
+                            int gh;
+                            if (int.TryParse(parts[12], out gh)) gpsHash = gh;
                         }
                     }
 
@@ -704,6 +711,7 @@ namespace TSUT.MappingSystem
                         ContractorIdentityId = contractorId,
                         AcceptedTicks        = acceptedTicks,
                         CoverageMet          = coverageMet,
+                        SurveyGpsHash        = gpsHash,
                         MoneyReward          = moneyReward > 0 ? moneyReward : (liveContract?.MoneyReward ?? 0),
                         ReputationReward     = repReward > 0 ? repReward : (liveContract?.RewardReputation ?? 0),
                         FactionTag           = liveContract != null ? GetFactionTag(liveContract) : "?",
