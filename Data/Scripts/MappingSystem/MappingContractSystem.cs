@@ -10,12 +10,23 @@ using VRageMath;
 
 namespace TSUT.MappingSystem
 {
+    public class ClientContractInfo
+    {
+        public long ContractId;
+        public Vector3D Center;
+        public float Radius;
+        public long AcceptedTicks;
+        public Vector3D StationCenter;
+        public bool CoverageMet;
+    }
+
     public class MappingContractMeta
     {
         public Vector3D Center;        // survey area center
         public Vector3D StationCenter; // where player returns for reward
         public float Radius;
         public long ContractorIdentityId;
+        public long AcceptedTicks;     // DateTime.UtcNow.Ticks when contract was accepted
         public bool CoverageMet;
         public int MoneyReward;
         public int ReputationReward;
@@ -26,7 +37,8 @@ namespace TSUT.MappingSystem
 
     public class MappingContractSystem
     {
-        private const float CoverageThreshold = 0.75f;
+        public const float CoverageThreshold = 0.75f;
+        public const float StationAntennaRadius = 500f;
         private const string StorageKey       = "AMS_ContractMeta";
         private const string SpawnedKey       = "AMS_SpawnedIds";
         private int _periodicTopUpInterval;
@@ -74,7 +86,6 @@ namespace TSUT.MappingSystem
             LoadSpawnedIds();
             foreach (var handler in _handlers)
                 handler.Init(_system, _spawnedIds);
-            LoadContractMetas();
             MyLog.Default.WriteLine($"{Config.LogPrefix} Contract system ready. Economy interval: {_periodicTopUpInterval}s, {_handlers.Count} handlers, {_spawnedIds.Count} pending IDs restored");
         }
 
@@ -182,7 +193,7 @@ namespace TSUT.MappingSystem
             {
                 int count;
                 pendingByDef.TryGetValue(handler.DefinitionId, out count);
-                if (count < 2)
+                if (count < handler.MaxPerStation)
                 {
                     handler.Spawn(_system, stationId, blockId, stationPos, planet, _spawnedIds);
                     anySpawned = true;
@@ -224,16 +235,17 @@ namespace TSUT.MappingSystem
             var toComplete = new List<KeyValuePair<long, MappingContractMeta>>();
             foreach (var kvp in _contracts)
             {
-                if (!kvp.Value.CoverageMet) continue;
-
+                var meta = kvp.Value;
                 IMyPlayer contractor = null;
                 foreach (var p in players)
                 {
-                    if (p.IdentityId == kvp.Value.ContractorIdentityId) { contractor = p; break; }
+                    if (p.IdentityId == meta.ContractorIdentityId) { contractor = p; break; }
                 }
                 if (contractor?.Character == null) continue;
+                if (Vector3D.Distance(contractor.Character.GetPosition(), meta.StationCenter) > 130.0) continue;
 
-                if (Vector3D.Distance(contractor.Character.GetPosition(), kvp.Value.StationCenter) <= 130.0)
+                float freshCoverage = ComputeFreshCoverage(meta, contractor);
+                if (freshCoverage >= CoverageThreshold)
                     toComplete.Add(kvp);
             }
 
@@ -262,72 +274,179 @@ namespace TSUT.MappingSystem
             if (meta == null) return;
 
             meta.Handler = handler;
+            meta.AcceptedTicks = DateTime.UtcNow.Ticks;
             _contracts[contractId] = meta;
             _spawnedIds.Remove(contractId);
             SaveSpawnedIds();
             SaveToStorage();
             MyLog.Default.WriteLine($"{Config.LogPrefix} Contract {contractId} accepted by {identityId}");
+
+            ulong steamId = GetSteamIdByIdentity(identityId);
+            if (steamId != 0)
+                MapSession.Instance.Networking.SendToPlayer(
+                    new PacketContractSync(contractId, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet),
+                    steamId);
         }
 
         private void OnScanCompleted(IMyRadioAntenna antenna)
         {
-            CheckCoverageForAntenna(antenna);
-        }
-
-        public void CheckCoverageForAntenna(IMyRadioAntenna antenna)
-        {
             if (_system == null || _contracts.Count == 0) return;
 
-            var storage = antenna.Components.Get<MapStorageComponent>();
-            if (storage?.Grid == null) return;
-
-            long ownerId = antenna.OwnerId;
             bool anyChanged = false;
+            long ownerId = antenna.OwnerId;
 
             foreach (var kvp in _contracts)
             {
                 var meta = kvp.Value;
-                if (meta.ContractorIdentityId != ownerId) continue;
+                if (meta.CoverageMet) continue;
 
-                // Basic survey may have an unresolved center if the station block wasn't ready on activate
+                // Resolve unresolved center
                 if (meta.Center == Vector3D.Zero)
                 {
                     var contract = _system.GetContractById(kvp.Key) as IMyContract;
-                    if (contract != null)
-                    {
-                        meta.Center        = GetStationPosition(contract);
-                        meta.StationCenter = meta.Center;
-                    }
-                    if (meta.Center == Vector3D.Zero)
-                    {
-                        MyLog.Default.WriteLine($"{Config.LogPrefix} Contract {kvp.Key}: center still unknown, skipping coverage check");
-                        continue;
-                    }
+                    if (contract != null) { meta.Center = GetStationPosition(contract); meta.StationCenter = meta.Center; }
+                    if (meta.Center == Vector3D.Zero) continue;
                     anyChanged = true;
                 }
 
-                if (meta.CoverageMet) continue;
+                // Check if this antenna's owner is the contractor or in their faction
+                if (!IsOwnerOrFaction(ownerId, meta.ContractorIdentityId)) continue;
 
-                float coverage = CalculateCoverage(meta.Center, meta.Radius, storage.Grid);
-                if (coverage < CoverageThreshold) continue;
+                // Fresh coverage check from just this antenna (notify when enough fresh data gathered)
+                var storage = antenna.Components.Get<MapStorageComponent>();
+                if (storage?.Grid == null) continue;
+
+                float fresh = ComputeFreshCoverageFromGrid(meta, storage.Grid);
+                if (fresh < CoverageThreshold) continue;
 
                 meta.CoverageMet = true;
                 anyChanged = true;
-                meta.Handler?.OnCoverageMet(kvp.Key, meta, GetSteamIdByIdentity(meta.ContractorIdentityId));
+                ulong steamId = GetSteamIdByIdentity(meta.ContractorIdentityId);
+                meta.Handler?.OnCoverageMet(kvp.Key, meta, steamId);
+
+                // Sync updated CoverageMet to client
+                if (steamId != 0)
+                    MapSession.Instance.Networking.SendToPlayer(
+                        new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, true),
+                        steamId);
             }
 
-            if (anyChanged)
-                SaveToStorage();
+            if (anyChanged) SaveToStorage();
+        }
+
+        public void SendContractsToPlayer(ulong steamId)
+        {
+            var players = new List<IMyPlayer>();
+            MyAPIGateway.Players.GetPlayers(players, p => p.SteamUserId == steamId);
+            if (players.Count == 0) return;
+            SendContractsToPlayer(steamId, players[0].IdentityId);
+        }
+
+        public void SendContractsToPlayer(ulong steamId, long identityId)
+        {
+            foreach (var kvp in _contracts)
+            {
+                var meta = kvp.Value;
+                if (meta.ContractorIdentityId != identityId) continue;
+                MapSession.Instance.Networking.SendToPlayer(
+                    new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet),
+                    steamId);
+            }
+        }
+
+        private float ComputeFreshCoverage(MappingContractMeta meta, IMyPlayer contractor)
+        {
+            // Find all faction/player antennas within station range, pool fresh cells
+            var faction = MyAPIGateway.Session.Factions.TryGetPlayerFaction(meta.ContractorIdentityId);
+
+            var entities = new HashSet<VRage.ModAPI.IMyEntity>();
+            MyAPIGateway.Entities.GetEntities(entities, e => e is IMyRadioAntenna);
+
+            int cellSize = Config.Instance.CellSize;
+            int sampled = 0, found = 0;
+
+            // Collect grids to check (deduplicated)
+            var grids = new List<MapGrid>();
+            foreach (var entity in entities)
+            {
+                var antenna = entity as IMyRadioAntenna;
+                if (antenna == null) continue;
+                if (Vector3D.Distance(antenna.WorldMatrix.Translation, meta.StationCenter) > StationAntennaRadius) continue;
+                if (!IsOwnerOrFaction(antenna.OwnerId, meta.ContractorIdentityId)) continue;
+                var storage = antenna.Components.Get<MapStorageComponent>();
+                if (storage?.Grid != null) grids.Add(storage.Grid);
+            }
+
+            if (grids.Count == 0) return 0f;
+
+            for (float dx = -meta.Radius; dx <= meta.Radius; dx += cellSize)
+            {
+                for (float dz = -meta.Radius; dz <= meta.Radius; dz += cellSize)
+                {
+                    if (dx * dx + dz * dz > meta.Radius * meta.Radius) continue;
+                    sampled++;
+
+                    var worldPos = meta.Center + new Vector3D(dx, 0, dz);
+                    var cellPos = ProjectionHelper.WorldToGrid(worldPos, cellSize);
+
+                    foreach (var grid in grids)
+                    {
+                        var cell = grid.GetCell(cellPos);
+                        if (cell == null) continue;
+                        if (grid.GetChunkWrittenTicks(cellPos) < meta.AcceptedTicks) continue;
+                        found++;
+                        break;
+                    }
+                }
+            }
+
+            return sampled > 0 ? (float)found / sampled : 0f;
+        }
+
+        private float ComputeFreshCoverageFromGrid(MappingContractMeta meta, MapGrid grid)
+        {
+            int cellSize = Config.Instance.CellSize;
+            int sampled = 0, found = 0;
+
+            for (float dx = -meta.Radius; dx <= meta.Radius; dx += cellSize)
+            {
+                for (float dz = -meta.Radius; dz <= meta.Radius; dz += cellSize)
+                {
+                    if (dx * dx + dz * dz > meta.Radius * meta.Radius) continue;
+                    sampled++;
+                    var cellPos = ProjectionHelper.WorldToGrid(meta.Center + new Vector3D(dx, 0, dz), cellSize);
+                    if (grid.GetCell(cellPos) == null) continue;
+                    if (grid.GetChunkWrittenTicks(cellPos) < meta.AcceptedTicks) continue;
+                    found++;
+                }
+            }
+
+            return sampled > 0 ? (float)found / sampled : 0f;
+        }
+
+        private bool IsOwnerOrFaction(long ownerId, long contractorIdentityId)
+        {
+            if (ownerId == contractorIdentityId) return true;
+            var contractorFaction = MyAPIGateway.Session.Factions.TryGetPlayerFaction(contractorIdentityId);
+            if (contractorFaction == null) return false;
+            var ownerFaction = MyAPIGateway.Session.Factions.TryGetPlayerFaction(ownerId);
+            return ownerFaction?.FactionId == contractorFaction.FactionId;
         }
 
         private void OnFinishFor(long contractId, long identityId, int rewardeeCount)
         {
             MyLog.Default.WriteLine($"{Config.LogPrefix} Mapping contract {contractId} completed by {identityId}");
+            ulong steamId = GetSteamIdByIdentity(identityId);
+            if (steamId != 0)
+                MapSession.Instance.Networking.SendToPlayer(new PacketContractEnded(contractId), steamId);
         }
 
         private void OnFailFor(long contractId, long identityId, bool isAbandon)
         {
             MyLog.Default.WriteLine($"{Config.LogPrefix} Mapping contract {contractId} {(isAbandon ? "abandoned" : "failed")} by {identityId}");
+            ulong steamId = GetSteamIdByIdentity(identityId);
+            if (steamId != 0)
+                MapSession.Instance.Networking.SendToPlayer(new PacketContractEnded(contractId), steamId);
         }
 
         private void OnCleanUp(long contractId)
@@ -337,6 +456,9 @@ namespace TSUT.MappingSystem
             {
                 meta.Handler?.CleanUp(meta);
                 MyLog.Default.WriteLine($"{Config.LogPrefix} Active contract {contractId} cleaned up");
+                ulong steamId = GetSteamIdByIdentity(meta.ContractorIdentityId);
+                if (steamId != 0)
+                    MapSession.Instance.Networking.SendToPlayer(new PacketContractEnded(contractId), steamId);
             }
             _contracts.Remove(contractId);
             SaveToStorage();
@@ -442,7 +564,7 @@ namespace TSUT.MappingSystem
                     var m = kvp.Value;
                     sb.Append($"{kvp.Key}:{m.Center.X:R},{m.Center.Y:R},{m.Center.Z:R}," +
                               $"{m.StationCenter.X:R},{m.StationCenter.Y:R},{m.StationCenter.Z:R}," +
-                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.MoneyReward},{m.ReputationReward};");
+                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.MoneyReward},{m.ReputationReward},{m.AcceptedTicks};");
                 }
                 MyAPIGateway.Utilities.SetVariable(StorageKey, sb.ToString());
             }
@@ -490,7 +612,7 @@ namespace TSUT.MappingSystem
             }
         }
 
-        private void LoadContractMetas()
+        public void LoadContractMetas()
         {
             try
             {
@@ -508,7 +630,7 @@ namespace TSUT.MappingSystem
                     if (!long.TryParse(entry.Substring(0, colon), out contractId)) continue;
 
                     var parts = entry.Substring(colon + 1).Split(',');
-                    if (parts.Length != 5 && parts.Length != 8 && parts.Length != 11) continue;
+                    if (parts.Length != 5 && parts.Length != 8 && parts.Length != 11 && parts.Length != 12) continue;
 
                     double cx, cy, cz;
                     if (!double.TryParse(parts[0], out cx) ||
@@ -521,6 +643,7 @@ namespace TSUT.MappingSystem
                     long contractorId;
                     bool coverageMet = false;
                     int moneyReward = 0, repReward = 0;
+                    long acceptedTicks = 0;
 
                     if (parts.Length == 5)
                     {
@@ -541,7 +664,7 @@ namespace TSUT.MappingSystem
                         moneyReward   = mr;
                         repReward     = rr;
                     }
-                    else // 11
+                    else // 11 or 12
                     {
                         double scx, scy, scz;
                         int cm, mr, rr;
@@ -557,6 +680,11 @@ namespace TSUT.MappingSystem
                         coverageMet   = cm != 0;
                         moneyReward   = mr;
                         repReward     = rr;
+                        if (parts.Length == 12)
+                        {
+                            long at;
+                            if (long.TryParse(parts[11], out at)) acceptedTicks = at;
+                        }
                     }
 
                     if (!_system.IsContractActive(contractId)) continue;
@@ -574,6 +702,7 @@ namespace TSUT.MappingSystem
                         StationCenter        = stationCenter,
                         Radius               = radius,
                         ContractorIdentityId = contractorId,
+                        AcceptedTicks        = acceptedTicks,
                         CoverageMet          = coverageMet,
                         MoneyReward          = moneyReward > 0 ? moneyReward : (liveContract?.MoneyReward ?? 0),
                         ReputationReward     = repReward > 0 ? repReward : (liveContract?.RewardReputation ?? 0),

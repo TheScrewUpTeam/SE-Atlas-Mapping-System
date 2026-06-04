@@ -7,7 +7,7 @@ namespace TSUT.MappingSystem
 {
     public class Config
     {
-        public static readonly string CurrentVersion = "1.0.1";
+        public static readonly string CurrentVersion = "1.0.2";
         public static readonly ushort NetworkId = 54321;
         public static readonly string ConfigFileName = "MappingSystem_Config.xml";
         public static readonly Guid StorageGuid = new Guid("8E373F26-3C72-4742-87C2-79013A63A294");
@@ -37,7 +37,7 @@ namespace TSUT.MappingSystem
         // Shared reward/rep/duration multipliers (per-km² of radius, or per km of radius)
         public double ContractRewardPerRadiusKm2 { get; set; } = 120000.0;
         public double ContractRepPerRadiusKm { get; set; } = 100.0;
-        public double ContractDurationPerRadiusKm2 { get; set; } = 3.0;
+        public double ContractDurationPerRadiusKm2 { get; set; } = 5.0;
 
         // Remote survey additional multipliers
         public double RemoteRewardPerDistanceKm { get; set; } = 15000.0;

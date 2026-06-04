@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Sandbox.ModAPI;
 using VRage.Game.Components;
 
@@ -11,6 +12,7 @@ namespace TSUT.MappingSystem
         public ScanScheduler Scheduler;
         public Networking Networking;
         public MappingContractSystem Contracts;
+        public List<ClientContractInfo> ClientContracts = new List<ClientContractInfo>();
 
         private int _ticks = 0;
         private const int SyncIntervalTicks = 300; // Sync every 5 seconds
@@ -34,6 +36,9 @@ namespace TSUT.MappingSystem
         {
             MyAPIGateway.TerminalControls.CustomControlGetter += OnCustomControlGetter;
             MyAPIGateway.Utilities.MessageEntered += OnMessageEntered;
+
+            if (!MyAPIGateway.Session.IsServer)
+                Networking.SendToServer(new PacketContractRequest());
         }
 
         protected override void UnloadData()
@@ -68,7 +73,13 @@ namespace TSUT.MappingSystem
             if (_contractSpawnPending && MyAPIGateway.Session.IsServer)
             {
                 _contractSpawnPending = false;
+                Contracts?.LoadContractMetas();
                 Contracts?.SpawnContractsAtNPCStations();
+
+                // Push restored contracts to local player (listen server / single player)
+                var localPlayer = MyAPIGateway.Session.Player;
+                if (localPlayer != null)
+                    Contracts?.SendContractsToPlayer(MyAPIGateway.Multiplayer.MyId, localPlayer.IdentityId);
             }
 
             if (Scheduler != null)

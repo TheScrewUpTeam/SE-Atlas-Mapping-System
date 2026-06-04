@@ -19,6 +19,9 @@ namespace TSUT.MappingSystem
     [ProtoInclude(18, typeof(PacketHolotableSync))]
     [ProtoInclude(19, typeof(PacketDisplaySync))]
     [ProtoInclude(20, typeof(PacketScanStopRequest))]
+    [ProtoInclude(21, typeof(PacketContractSync))]
+    [ProtoInclude(22, typeof(PacketContractEnded))]
+    [ProtoInclude(23, typeof(PacketContractRequest))]
     public abstract class PacketBase
     {
         public abstract void Handle(ulong senderId);
@@ -187,6 +190,72 @@ namespace TSUT.MappingSystem
         }
     }
 
+    // Server → contracting player: contract zone info for LCD/terminal display
+    [ProtoContract]
+    public class PacketContractSync : PacketBase
+    {
+        [ProtoMember(1)] public long ContractId;
+        [ProtoMember(2)] public VRageMath.Vector3D Center;
+        [ProtoMember(3)] public float Radius;
+        [ProtoMember(4)] public long AcceptedTicks;
+        [ProtoMember(5)] public VRageMath.Vector3D StationCenter;
+        [ProtoMember(6)] public bool CoverageMet;
+
+        public PacketContractSync() { }
+        public PacketContractSync(long contractId, VRageMath.Vector3D center, float radius, long acceptedTicks, VRageMath.Vector3D stationCenter, bool coverageMet)
+        {
+            ContractId = contractId; Center = center; Radius = radius;
+            AcceptedTicks = acceptedTicks; StationCenter = stationCenter; CoverageMet = coverageMet;
+        }
+
+        public override void Handle(ulong senderId)
+        {
+            var existing = MapSession.Instance.ClientContracts.Find(c => c.ContractId == ContractId);
+            if (existing != null)
+            {
+                existing.Center = Center; existing.Radius = Radius;
+                existing.AcceptedTicks = AcceptedTicks; existing.StationCenter = StationCenter;
+                existing.CoverageMet = CoverageMet;
+            }
+            else
+            {
+                MapSession.Instance.ClientContracts.Add(new ClientContractInfo
+                {
+                    ContractId = ContractId, Center = Center, Radius = Radius,
+                    AcceptedTicks = AcceptedTicks, StationCenter = StationCenter, CoverageMet = CoverageMet
+                });
+            }
+        }
+    }
+
+    // Server → contracting player: contract ended (complete/fail/abandon)
+    [ProtoContract]
+    public class PacketContractEnded : PacketBase
+    {
+        [ProtoMember(1)] public long ContractId;
+
+        public PacketContractEnded() { }
+        public PacketContractEnded(long contractId) { ContractId = contractId; }
+
+        public override void Handle(ulong senderId)
+        {
+            MapSession.Instance.ClientContracts.RemoveAll(c => c.ContractId == ContractId);
+        }
+    }
+
+    // Client → server: request active contracts on join
+    [ProtoContract]
+    public class PacketContractRequest : PacketBase
+    {
+        public PacketContractRequest() { }
+
+        public override void Handle(ulong senderId)
+        {
+            if (!MyAPIGateway.Session.IsServer) return;
+            MapSession.Instance.Contracts?.SendContractsToPlayer(senderId);
+        }
+    }
+
     [ProtoContract]
     public class PacketExchangeRequest : PacketBase
     {
@@ -225,10 +294,6 @@ namespace TSUT.MappingSystem
                 MapSession.Instance.Networking.SendToAll(new PacketChunkSync(TargetEntityId, targetStorage.Grid.GetSerializedChunks()));
                 MapSession.Instance.Networking.SendToPlayer(new PacketNotification("Data exchange complete.", 3000), senderId);
                 MyLog.Default.WriteLine($"{Config.LogPrefix} [Exchange] Sync sent to all, notification sent to {senderId}");
-
-                var targetAntenna = targetEntity as IMyRadioAntenna;
-                if (targetAntenna != null)
-                    MapSession.Instance.Contracts?.CheckCoverageForAntenna(targetAntenna);
             }
             else
             {

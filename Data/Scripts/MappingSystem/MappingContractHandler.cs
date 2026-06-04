@@ -10,6 +10,7 @@ namespace TSUT.MappingSystem
     public abstract class MappingContractHandler
     {
         public abstract MyDefinitionId DefinitionId { get; }
+        public virtual int MaxPerStation => 2;
 
         public virtual void Init(IMyContractSystem system, HashSet<long> spawnedIds) { }
 

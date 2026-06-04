@@ -199,6 +199,39 @@ namespace TSUT.MappingSystem
             info.AppendLine($"Map Data Stored:");
             info.AppendLine($"  Chunks: {chunks} / {capacity}");
             info.AppendLine($"  Cells: {cells}");
+
+            var contracts = MapSession.Instance?.ClientContracts;
+            if (contracts != null && contracts.Count > 0 && storage?.Grid != null)
+            {
+                info.AppendLine("\nActive Contracts:");
+                int cellSize = Config.Instance.CellSize;
+                foreach (var contract in contracts)
+                {
+                    float fresh = ComputeLocalFreshCoverage(storage.Grid, contract, cellSize);
+                    float radiusKm = contract.Radius / 1000f;
+                    info.AppendLine($"- Know your surroundings ({radiusKm:F0}km)");
+                    info.AppendLine($"   Zone: {radiusKm:F0}km");
+                    info.AppendLine($"   Progress: {fresh * 100f:F0}%");
+                }
+            }
+        }
+
+        private static float ComputeLocalFreshCoverage(MapGrid grid, ClientContractInfo contract, int cellSize)
+        {
+            int sampled = 0, found = 0;
+            for (float dx = -contract.Radius; dx <= contract.Radius; dx += cellSize)
+            {
+                for (float dz = -contract.Radius; dz <= contract.Radius; dz += cellSize)
+                {
+                    if (dx * dx + dz * dz > contract.Radius * contract.Radius) continue;
+                    sampled++;
+                    var cellPos = ProjectionHelper.WorldToGrid(contract.Center + new Vector3D(dx, 0, dz), cellSize);
+                    if (grid.GetCell(cellPos) == null) continue;
+                    if (grid.GetChunkWrittenTicks(cellPos) < contract.AcceptedTicks) continue;
+                    found++;
+                }
+            }
+            return sampled > 0 ? (float)found / sampled : 0f;
         }
 
         public override void UpdateOnceBeforeFrame()
@@ -311,8 +344,6 @@ namespace TSUT.MappingSystem
                     MyLog.Default.WriteLine($"{Config.LogPrefix} [Exchange] Merged: target cells {cellsBefore} -> {cellsAfter}");
                     MapSession.Instance?.Networking.SendToAll(new PacketChunkSync(Entity.EntityId, targetStorage.Grid.GetSerializedChunks()));
                     MyAPIGateway.Utilities.ShowNotification("Data exchange complete.", 2000, MyFontEnum.Green);
-
-                    MapSession.Instance.Contracts?.CheckCoverageForAntenna(_antenna);
                 }
                 else
                 {

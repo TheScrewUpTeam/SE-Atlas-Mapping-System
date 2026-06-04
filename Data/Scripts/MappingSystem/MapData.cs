@@ -29,6 +29,7 @@ namespace TSUT.MappingSystem
         [ProtoMember(2)] public List<CellEntry> SerializedCells;
 
         [ProtoMember(3)] public long LastUsedTicks;
+        [ProtoMember(4)] public long LastWrittenTicks;
 
         [XmlIgnore]
         public Dictionary<Vector2I, MapCell> Cells = new Dictionary<Vector2I, MapCell>();
@@ -162,9 +163,20 @@ namespace TSUT.MappingSystem
 
                 chunk.Cells[cellPos] = cellData;
                 TotalHeight += cellData.Height;
+                chunk.LastWrittenTicks = DateTime.UtcNow.Ticks;
             }
+        }
 
-            DataChanged?.Invoke();
+        public long GetChunkWrittenTicks(Vector2I cellPos)
+        {
+            Vector2I chunkPos = new Vector2I(
+                (int)Math.Floor((float)cellPos.X / ChunkSize),
+                (int)Math.Floor((float)cellPos.Y / ChunkSize));
+            lock (_lock)
+            {
+                MapChunk chunk;
+                return Chunks.TryGetValue(chunkPos, out chunk) ? chunk.LastWrittenTicks : 0;
+            }
         }
 
         public MapCell? GetCell(Vector2I cellPos)

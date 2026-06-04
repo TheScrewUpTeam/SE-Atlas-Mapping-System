@@ -160,7 +160,8 @@ namespace TSUT.MappingSystem
         public void MarkDirty()
         {
             _isDirty = true;
-            Save();
+            LastActualUpdate = DateTime.Now;
+            DataChanged?.Invoke();
         }
 
         public void ReceiveChunkSync(List<ChunkEntry> chunks)

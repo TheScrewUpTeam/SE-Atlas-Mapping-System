@@ -17,6 +17,8 @@ namespace TSUT.MappingSystem
         public override MyDefinitionId DefinitionId { get; } = new MyDefinitionId(
             MyObjectBuilderType.ParseBackwardsCompatible("ContractTypeDefinition"), "MappingContract");
 
+        public override int MaxPerStation => 1;
+
         public override void Spawn(
             IMyContractSystem system,
             long stationId,

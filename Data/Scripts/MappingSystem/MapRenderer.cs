@@ -40,7 +40,8 @@ namespace TSUT.MappingSystem
             _zoom = MathHelper.Clamp(zoom, 1f, 500f);
         }
 
-        public void Draw(MatrixD antennaMatrix, bool isStatic, float heading, bool rotateMap, bool isScanning, string eta)
+        public void Draw(MatrixD antennaMatrix, bool isStatic, float heading, bool rotateMap, bool isScanning, string eta,
+            List<ClientContractInfo> contracts = null)
         {
             if (_surface == null) return;
 
@@ -54,7 +55,9 @@ namespace TSUT.MappingSystem
             using (MySpriteDrawFrame frame = _surface.DrawFrame())
             {
                 DrawBackground(frame, context);
-                DrawTerrain(frame, context);
+                DrawTerrain(frame, context, contracts);
+                if (contracts != null && contracts.Count > 0)
+                    DrawContractZones(frame, context, contracts);
                 DrawMarkers(frame, context);
                 DrawUserIndicator(frame, context, antennaMatrix.Translation);
                 DrawStatus(frame, context, isScanning, eta);
@@ -126,12 +129,20 @@ namespace TSUT.MappingSystem
             frame.Add(bg);
         }
 
-        private void DrawTerrain(MySpriteDrawFrame frame, RenderContext context)
+        private void DrawTerrain(MySpriteDrawFrame frame, RenderContext context, List<ClientContractInfo> contracts)
         {
             int cellSize = Config.Instance.CellSize;
+            bool hasContracts = contracts != null && contracts.Count > 0;
+            long oldestAcceptedTicks = hasContracts ? long.MaxValue : 0;
+            if (hasContracts)
+                foreach (var c in contracts)
+                    if (c.AcceptedTicks < oldestAcceptedTicks) oldestAcceptedTicks = c.AcceptedTicks;
+
             foreach (var chunk in _grid.Chunks.Values)
             {
                 bool chunkUsed = false;
+                bool chunkFresh = hasContracts && chunk.LastWrittenTicks >= oldestAcceptedTicks;
+
                 foreach (var kvp in chunk.Cells)
                 {
                     Vector3D worldPos = ProjectionHelper.GridToWorld(kvp.Key, cellSize, kvp.Value.Height, context.Planet);
@@ -140,23 +151,62 @@ namespace TSUT.MappingSystem
                     if (IsInViewport(screenPos, context))
                     {
                         var color = GetHeightColor(kvp.Value);
+
+                        if (hasContracts)
+                        {
+                            bool inZone = false;
+                            foreach (var contract in contracts)
+                            {
+                                if (Vector3D.DistanceSquared(worldPos, contract.Center) <= (double)contract.Radius * contract.Radius)
+                                { inZone = true; break; }
+                            }
+                            if (inZone && !chunkFresh)
+                                color = Color.Lerp(color, Color.DarkGray, 0.55f);
+                        }
+
+                        float pixelSize = Math.Max(1f, cellSize / context.Zoom);
                         frame.Add(new MySprite()
                         {
                             Type = SpriteType.TEXTURE,
                             Data = "SquareSimple",
                             Color = color,
                             Position = screenPos,
-                            Size = new Vector2(Math.Max(1f, cellSize / context.Zoom), Math.Max(1f, cellSize / context.Zoom)),
+                            Size = new Vector2(pixelSize, pixelSize),
                             RotationOrScale = -context.Heading
                         });
                         chunkUsed = true;
                     }
                 }
 
-                if (chunkUsed)
+                if (chunkUsed) chunk.Touch();
+            }
+        }
+
+        private void DrawContractZones(MySpriteDrawFrame frame, RenderContext context, List<ClientContractInfo> contracts)
+        {
+            int cellSize = Config.Instance.CellSize;
+            foreach (var contract in contracts)
+            {
+                // Round-trip through equirectangular grid so the center lies on the sphere surface,
+                // matching how terrain cells are positioned (GridToWorld → WorldToScreen).
+                Vector3D mappedCenter = contract.Center;
+                if (Config.Instance.AlignToGravity && context.Planet != null)
                 {
-                    chunk.Touch();
+                    var gridPos = ProjectionHelper.WorldToGrid(contract.Center, cellSize);
+                    mappedCenter = ProjectionHelper.GridToWorld(gridPos, cellSize, 0, context.Planet);
                 }
+
+                Vector2 screenCenter = WorldToScreen(mappedCenter, context);
+                float screenRadius = contract.Radius / context.Zoom;
+                if (screenRadius < 1f) continue;
+
+                frame.Add(new MySprite()
+                {
+                    Type = SpriteType.TEXTURE, Data = "CircleHollow",
+                    Color = Color.Red,
+                    Position = new Vector2(screenCenter.X - screenRadius, screenCenter.Y),
+                    Size = new Vector2(screenRadius * 2f, screenRadius * 2f)
+                });
             }
         }
 

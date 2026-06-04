@@ -163,7 +163,8 @@ namespace TSUT.MappingSystem
 
                     bool isScanning = scannerEntry?.IsLocallyScanning ?? false;
                     string eta = scannerEntry?.GetScanETA() ?? "N/A";
-                    _renderer.Draw(m_block.WorldMatrix, isStatic, heading, rotateMap, isScanning, eta);
+                    var contracts = MapSession.Instance?.ClientContracts;
+                    _renderer.Draw(m_block.WorldMatrix, isStatic, heading, rotateMap, isScanning, eta, contracts);
                 }
                 else
                 {

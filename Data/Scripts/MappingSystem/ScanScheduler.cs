@@ -167,10 +167,6 @@ namespace TSUT.MappingSystem
             }
             _activeScans.Remove(antennaId);
             MapSession.Instance.Networking.SendToAll(new PacketScanEnded(antennaId, info.ScanId));
-
-            var antenna = info.Antenna as IMyRadioAntenna;
-            if (antenna != null)
-                MapSession.Instance.Contracts?.CheckCoverageForAntenna(antenna);
         }
 
         private void CompleteScan(long antennaId, ScanInfo info)
@@ -219,6 +215,9 @@ namespace TSUT.MappingSystem
                         MapSession.Instance.Networking.SendToServer(packet);
                         scan.BatchResults = new List<CellResult>();
                         scan.LastBatchTick = _ticks;
+
+                        // Mark dirty once per batch, not per-ray
+                        scan.Antenna.Components.Get<MapStorageComponent>()?.MarkDirty();
                     }
 
                     if (isFinished)
@@ -286,7 +285,6 @@ namespace TSUT.MappingSystem
                     {
                         MapCell cell = new MapCell { Height = height, Flags = flags };
                         storage.Grid.AddCell(hit.Position, cell, Config.Instance.CellSize);
-                        storage.MarkDirty();
                     }
                     break;
                 }
