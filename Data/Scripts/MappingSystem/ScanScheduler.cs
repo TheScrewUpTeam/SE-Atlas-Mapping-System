@@ -27,6 +27,16 @@ namespace TSUT.MappingSystem
         public int TotalRays;
         public List<CellResult> BatchResults = new List<CellResult>();
         public int LastBatchTick;
+        public IMyCubeGrid AntennaCubeGrid;
+        public MatrixD GravityRotation;
+        public MyPlanet Planet;
+    }
+
+    public struct DebugRay
+    {
+        public Vector3D Origin;
+        public Vector3D End;
+        public bool Hit;
     }
 
     public class ScanScheduler
@@ -38,6 +48,10 @@ namespace TSUT.MappingSystem
         private static int _nextScanId = 0;
         private const int VoxelCollisionLayer = 28;
         private int _ticks = 0;
+
+        public bool DebugVisualize = false;
+        public readonly List<DebugRay> DebugRaysList = new List<DebugRay>();
+        private const int DebugSampleEvery = 500;
 
         public ScanInfo GetActiveScan(long antennaId)
         {
@@ -90,6 +104,27 @@ namespace TSUT.MappingSystem
 
             if (_clientScans.Exists(s => s.Antenna.EntityId == entityId)) return;
 
+            IMyCubeGrid antennaCubeGrid = (entity as IMyTerminalBlock)?.CubeGrid;
+            MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(pos);
+
+            MatrixD gravityRotation = MatrixD.Identity;
+            if (planet != null)
+            {
+                Vector3D localDown = Vector3D.Normalize(planet.PositionComp.GetPosition() - pos);
+                Vector3D worldDown = new Vector3D(0, -1, 0);
+                Vector3D axis = Vector3D.Cross(worldDown, localDown);
+                double axisLen = axis.Length();
+                if (axisLen > 1e-6)
+                {
+                    double angle = Math.Acos(MathHelper.Clamp(Vector3D.Dot(worldDown, localDown), -1.0, 1.0));
+                    gravityRotation = MatrixD.CreateFromAxisAngle(axis / axisLen, angle);
+                }
+                else if (Vector3D.Dot(worldDown, localDown) < 0)
+                {
+                    gravityRotation = MatrixD.CreateFromAxisAngle(Vector3D.Right, Math.PI);
+                }
+            }
+
             _clientScans.Add(new ScanRequest
             {
                 Antenna = entity,
@@ -97,7 +132,10 @@ namespace TSUT.MappingSystem
                 Radius = radius,
                 TotalRays = totalRays,
                 CurrentRayIndex = 0,
-                LastBatchTick = _ticks
+                LastBatchTick = _ticks,
+                AntennaCubeGrid = antennaCubeGrid,
+                GravityRotation = gravityRotation,
+                Planet = planet
             });
         }
 
@@ -251,50 +289,118 @@ namespace TSUT.MappingSystem
         private void PerformClientRaycast(ScanRequest request)
         {
             double phi = Math.PI * (3 - Math.Sqrt(5));
-            double y = -1 + (request.CurrentRayIndex / (double)Math.Max(1, request.TotalRays - 1)) * 2;
-            double radiusAtY = Math.Sqrt(1 - y * y);
+            // Downward hemisphere only: y from -1 to 0
+            double y = -1.0 + (request.CurrentRayIndex / (double)Math.Max(1, request.TotalRays - 1));
+            double radiusAtY = Math.Sqrt(1.0 - y * y);
             double theta = phi * request.CurrentRayIndex;
 
             Vector3D dir = new Vector3D(Math.Cos(theta) * radiusAtY, y, Math.Sin(theta) * radiusAtY);
-            Vector3D origin = request.Position;
-            Vector3D currentStart = origin;
-            Vector3D end = origin + dir * request.Radius;
+            dir = Vector3D.TransformNormal(dir, request.GravityRotation);
 
-            IHitInfo hit;
-            int safetyCounter = 0;
+            bool debugSample = DebugVisualize && (request.CurrentRayIndex % DebugSampleEvery == 0);
 
-            var storage = request.Antenna.Components.Get<MapStorageComponent>();
-
-            while (safetyCounter < Config.Instance.MaxScanPunchThroughs && MyAPIGateway.Physics.CastRay(currentStart, end, out hit, VoxelCollisionLayer))
+            if (request.Planet != null)
             {
-                if (hit.HitEntity is IMyVoxelBase)
+                Vector3D planetCenter = request.Planet.PositionComp.GetPosition();
+                Vector3D originLocal = request.Position - planetCenter;
+
+                // Ray-sphere intersection at AverageRadius
+                double dotOD = Vector3D.Dot(originLocal, dir);
+                double c = originLocal.LengthSquared() - (double)request.Planet.AverageRadius * request.Planet.AverageRadius;
+                double disc = dotOD * dotOD - c;
+
+                if (disc < 0)
                 {
-                    MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(hit.Position);
-                    byte flags = 2;
-                    short height = (short)hit.Position.Y;
+                    if (debugSample) DebugRaysList.Add(new DebugRay { Origin = request.Position, End = request.Position + dir * request.Radius, Hit = false });
+                    return;
+                }
 
-                    if (planet != null && Vector3D.Distance(hit.Position, planet.PositionComp.GetPosition()) <= planet.MaximumRadius + 5.0)
+                double t = -dotOD - Math.Sqrt(disc);
+                if (t < 0) t = -dotOD + Math.Sqrt(disc);
+                if (t < 0 || t > request.Radius)
+                {
+                    if (debugSample) DebugRaysList.Add(new DebugRay { Origin = request.Position, End = request.Position + dir * request.Radius, Hit = false });
+                    return;
+                }
+
+                // Get actual terrain surface at nominal intersection direction
+                Vector3 localNominal = (Vector3)(originLocal + dir * t);
+                Vector3 surfaceLocal = request.Planet.GetClosestSurfacePointLocal(ref localNominal);
+                Vector3D surfaceWorld = planetCenter + (Vector3D)surfaceLocal;
+
+                if (Vector3D.DistanceSquared(surfaceWorld, request.Position) > (double)request.Radius * request.Radius)
+                {
+                    if (debugSample) DebugRaysList.Add(new DebugRay { Origin = request.Position, End = surfaceWorld, Hit = false });
+                    return;
+                }
+
+                // Reverse LOS: cast from surface up to antenna, punch through own construct
+                Vector3D surfaceUp = Vector3D.Normalize((Vector3D)surfaceLocal);
+                Vector3D losStart = surfaceWorld + surfaceUp * 0.5;
+                Vector3D losEnd = request.Position;
+                Vector3D losDir = Vector3D.Normalize(losEnd - losStart);
+
+                bool losBlocked = false;
+                IHitInfo hit;
+                Vector3D current = losStart;
+
+                while (MyAPIGateway.Physics.CastRay(current, losEnd, out hit))
+                {
+                    if (Vector3D.DistanceSquared(hit.Position, losEnd) < 0.25) break;
+
+                    var hitGrid = hit.HitEntity as IMyCubeGrid;
+                    if (hitGrid != null && request.AntennaCubeGrid != null && hitGrid.IsSameConstructAs(request.AntennaCubeGrid))
                     {
-                        flags = 1;
-                        height = (short)(Vector3D.Distance(hit.Position, planet.PositionComp.GetPosition()) - planet.AverageRadius);
+                        current = hit.Position + losDir * 0.5;
+                        continue;
                     }
 
-                    request.BatchResults.Add(new CellResult { Position = hit.Position, Height = height, Flags = flags });
-
-                    if (storage != null)
-                    {
-                        MapCell cell = new MapCell { Height = height, Flags = flags };
-                        storage.Grid.AddCell(hit.Position, cell, Config.Instance.CellSize);
-                    }
+                    losBlocked = true;
                     break;
                 }
-                else
-                {
-                    currentStart = hit.Position + (dir * 0.1);
-                    safetyCounter++;
-                    if (Vector3D.DistanceSquared(origin, currentStart) >= request.Radius * request.Radius) break;
-                }
+
+                if (debugSample)
+                    DebugRaysList.Add(new DebugRay { Origin = request.Position, End = surfaceWorld, Hit = !losBlocked });
+
+                if (losBlocked) return;
+
+                short height = (short)(surfaceLocal.Length() - request.Planet.AverageRadius);
+                var storage = request.Antenna.Components.Get<MapStorageComponent>();
+                request.BatchResults.Add(new CellResult { Position = surfaceWorld, Height = height, Flags = 1 });
+                if (storage != null)
+                    storage.Grid.AddCell(surfaceWorld, new MapCell { Height = height, Flags = 1 }, Config.Instance.CellSize);
+                return;
             }
+
+            // Fallback: original raycast for asteroids (no planet)
+            Vector3D origin = request.Position;
+            Vector3D fallbackStart = origin;
+            Vector3D end = origin + dir * request.Radius;
+            var fallbackStorage = request.Antenna.Components.Get<MapStorageComponent>();
+            bool gotHit = false;
+            Vector3D hitPos = end;
+            int safetyCounter = 0;
+            IHitInfo fallbackHit;
+
+            while (safetyCounter < Config.Instance.MaxScanPunchThroughs && MyAPIGateway.Physics.CastRay(fallbackStart, end, out fallbackHit, VoxelCollisionLayer))
+            {
+                if (fallbackHit.HitEntity is IMyVoxelBase)
+                {
+                    short height = (short)fallbackHit.Position.Y;
+                    request.BatchResults.Add(new CellResult { Position = fallbackHit.Position, Height = height, Flags = 2 });
+                    if (fallbackStorage != null)
+                        fallbackStorage.Grid.AddCell(fallbackHit.Position, new MapCell { Height = height, Flags = 2 }, Config.Instance.CellSize);
+                    gotHit = true;
+                    hitPos = fallbackHit.Position;
+                    break;
+                }
+                fallbackStart = fallbackHit.Position + dir * 0.1;
+                safetyCounter++;
+                if (Vector3D.DistanceSquared(origin, fallbackStart) >= request.Radius * request.Radius) break;
+            }
+
+            if (debugSample)
+                DebugRaysList.Add(new DebugRay { Origin = origin, End = hitPos, Hit = gotHit });
         }
     }
 }
