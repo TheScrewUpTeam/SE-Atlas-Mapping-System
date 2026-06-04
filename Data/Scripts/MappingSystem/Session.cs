@@ -55,31 +55,6 @@ namespace TSUT.MappingSystem
 
         private void OnMessageEntered(string messageText, ref bool sendToOthers)
         {
-            if (messageText.Trim().ToLower() == "/mapdebug")
-            {
-                sendToOthers = false;
-                if (Scheduler != null)
-                {
-                    Scheduler.DebugVisualize = !Scheduler.DebugVisualize;
-                    Scheduler.DebugRaysList.Clear();
-                    MyAPIGateway.Utilities.ShowNotification($"Scan debug rays: {(Scheduler.DebugVisualize ? "ON — start a scan" : "OFF")}", 4000);
-                }
-                return;
-            }
-
-            if (messageText.Trim().ToLower() == "/mapdebugnomiss")
-            {
-                sendToOthers = false;
-                if (Scheduler != null)
-                {
-                    int before = Scheduler.DebugRaysList.Count;
-                    Scheduler.DebugRaysList.RemoveAll(r => !r.Hit);
-                    int removed = before - Scheduler.DebugRaysList.Count;
-                    MyAPIGateway.Utilities.ShowNotification($"Removed {removed} missed rays, {Scheduler.DebugRaysList.Count} hits remain.", 4000);
-                }
-                return;
-            }
-
             if (messageText.Trim().ToLower() != "/mapspawn") return;
             sendToOthers = false;
 

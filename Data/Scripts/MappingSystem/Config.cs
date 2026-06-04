@@ -24,6 +24,7 @@ namespace TSUT.MappingSystem
         public float ScanPowerMultiplierLarge { get; set; } = 5000.0f;
         public int MaxRaycastsPerTick { get; set; } = 50;
         public int MaxScanPunchThroughs { get; set; } = 5;
+        public int ScanOversampleFactor { get; set; } = 3;
         public float PunchThroughOffset { get; set; } = 0.5f;
         public float MarkerUpdateIntervalSeconds { get; set; } = 10f;
 
