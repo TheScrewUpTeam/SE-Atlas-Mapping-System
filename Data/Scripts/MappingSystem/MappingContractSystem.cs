@@ -18,6 +18,7 @@ namespace TSUT.MappingSystem
         public long AcceptedTicks;
         public Vector3D StationCenter;
         public bool CoverageMet;
+        public string ContractName;
     }
 
     public class MappingContractMeta
@@ -32,6 +33,7 @@ namespace TSUT.MappingSystem
         public int ReputationReward;
         public string FactionTag;
         public int SurveyGpsHash;            // persisted, 0 = none
+        public string ContractName;          // runtime only, not persisted
         public IMyGps SurveyGps;             // runtime only, not persisted
         public MappingContractHandler Handler; // runtime only, not persisted
     }
@@ -39,7 +41,7 @@ namespace TSUT.MappingSystem
     public class MappingContractSystem
     {
         public const float CoverageThreshold = 0.75f;
-        public const float StationAntennaRadius = 500f;
+        public const float StationShieldRadius = 130f;
         private const string StorageKey       = "AMS_ContractMeta";
         private const string SpawnedKey       = "AMS_SpawnedIds";
         private int _periodicTopUpInterval;
@@ -243,7 +245,7 @@ namespace TSUT.MappingSystem
                     if (p.IdentityId == meta.ContractorIdentityId) { contractor = p; break; }
                 }
                 if (contractor?.Character == null) continue;
-                if (Vector3D.Distance(contractor.Character.GetPosition(), meta.StationCenter) > 130.0) continue;
+                if (Vector3D.Distance(contractor.Character.GetPosition(), meta.StationCenter) > 150.0) continue;
 
                 float freshCoverage = ComputeFreshCoverage(meta, contractor);
                 if (freshCoverage >= CoverageThreshold)
@@ -276,6 +278,7 @@ namespace TSUT.MappingSystem
 
             meta.Handler = handler;
             meta.AcceptedTicks = DateTime.UtcNow.Ticks;
+            meta.ContractName = (contract as IMyContractCustom)?.Name ?? "Survey";
             _contracts[contractId] = meta;
             _spawnedIds.Remove(contractId);
             SaveSpawnedIds();
@@ -285,7 +288,7 @@ namespace TSUT.MappingSystem
             ulong steamId = GetSteamIdByIdentity(identityId);
             if (steamId != 0)
                 MapSession.Instance.Networking.SendToPlayer(
-                    new PacketContractSync(contractId, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet),
+                    new PacketContractSync(contractId, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet, meta.ContractName),
                     steamId);
         }
 
@@ -328,7 +331,7 @@ namespace TSUT.MappingSystem
                 // Sync updated CoverageMet to client
                 if (steamId != 0)
                     MapSession.Instance.Networking.SendToPlayer(
-                        new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, true),
+                        new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, true, meta.ContractName),
                         steamId);
             }
 
@@ -350,32 +353,39 @@ namespace TSUT.MappingSystem
                 var meta = kvp.Value;
                 if (meta.ContractorIdentityId != identityId) continue;
                 MapSession.Instance.Networking.SendToPlayer(
-                    new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet),
+                    new PacketContractSync(kvp.Key, meta.Center, meta.Radius, meta.AcceptedTicks, meta.StationCenter, meta.CoverageMet, meta.ContractName),
                     steamId);
             }
         }
 
         private float ComputeFreshCoverage(MappingContractMeta meta, IMyPlayer contractor)
         {
-            // Find all faction/player antennas within station range, pool fresh cells
-            var faction = MyAPIGateway.Session.Factions.TryGetPlayerFaction(meta.ContractorIdentityId);
-
-            var entities = new HashSet<VRage.ModAPI.IMyEntity>();
-            MyAPIGateway.Entities.GetEntities(entities, e => e is IMyRadioAntenna);
+            var gridEntities = new HashSet<VRage.ModAPI.IMyEntity>();
+            MyAPIGateway.Entities.GetEntities(gridEntities, e => e is IMyCubeGrid);
 
             int cellSize = Config.Instance.CellSize;
             int sampled = 0, found = 0;
 
-            // Collect grids to check (deduplicated)
+            // Collect antenna grids within station shield radius
             var grids = new List<MapGrid>();
-            foreach (var entity in entities)
+            foreach (var entity in gridEntities)
             {
-                var antenna = entity as IMyRadioAntenna;
-                if (antenna == null) continue;
-                if (Vector3D.Distance(antenna.WorldMatrix.Translation, meta.StationCenter) > StationAntennaRadius) continue;
-                if (!IsOwnerOrFaction(antenna.OwnerId, meta.ContractorIdentityId)) continue;
-                var storage = antenna.Components.Get<MapStorageComponent>();
-                if (storage?.Grid != null) grids.Add(storage.Grid);
+                var cubeGrid = entity as IMyCubeGrid;
+                if (cubeGrid == null) continue;
+
+                var termSys = MyAPIGateway.TerminalActionsHelper.GetTerminalSystemForGrid(cubeGrid);
+                if (termSys == null) continue;
+
+                var antennas = new List<IMyRadioAntenna>();
+                termSys.GetBlocksOfType(antennas);
+
+                foreach (var antenna in antennas)
+                {
+                    if (Vector3D.Distance(antenna.WorldMatrix.Translation, meta.StationCenter) > StationShieldRadius) continue;
+                    if (!IsOwnerOrFaction(antenna.OwnerId, meta.ContractorIdentityId)) continue;
+                    var storage = antenna.Components.Get<MapStorageComponent>();
+                    if (storage?.Grid != null) grids.Add(storage.Grid);
+                }
             }
 
             if (grids.Count == 0) return 0f;

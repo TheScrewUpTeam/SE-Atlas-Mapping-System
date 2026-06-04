@@ -200,12 +200,14 @@ namespace TSUT.MappingSystem
         [ProtoMember(4)] public long AcceptedTicks;
         [ProtoMember(5)] public VRageMath.Vector3D StationCenter;
         [ProtoMember(6)] public bool CoverageMet;
+        [ProtoMember(7)] public string ContractName;
 
         public PacketContractSync() { }
-        public PacketContractSync(long contractId, VRageMath.Vector3D center, float radius, long acceptedTicks, VRageMath.Vector3D stationCenter, bool coverageMet)
+        public PacketContractSync(long contractId, VRageMath.Vector3D center, float radius, long acceptedTicks, VRageMath.Vector3D stationCenter, bool coverageMet, string contractName)
         {
             ContractId = contractId; Center = center; Radius = radius;
-            AcceptedTicks = acceptedTicks; StationCenter = stationCenter; CoverageMet = coverageMet;
+            AcceptedTicks = acceptedTicks; StationCenter = stationCenter;
+            CoverageMet = coverageMet; ContractName = contractName;
         }
 
         public override void Handle(ulong senderId)
@@ -215,14 +217,15 @@ namespace TSUT.MappingSystem
             {
                 existing.Center = Center; existing.Radius = Radius;
                 existing.AcceptedTicks = AcceptedTicks; existing.StationCenter = StationCenter;
-                existing.CoverageMet = CoverageMet;
+                existing.CoverageMet = CoverageMet; existing.ContractName = ContractName;
             }
             else
             {
                 MapSession.Instance.ClientContracts.Add(new ClientContractInfo
                 {
                     ContractId = ContractId, Center = Center, Radius = Radius,
-                    AcceptedTicks = AcceptedTicks, StationCenter = StationCenter, CoverageMet = CoverageMet
+                    AcceptedTicks = AcceptedTicks, StationCenter = StationCenter,
+                    CoverageMet = CoverageMet, ContractName = ContractName
                 });
             }
         }

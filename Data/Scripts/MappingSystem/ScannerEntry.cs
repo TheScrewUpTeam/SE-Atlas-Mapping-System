@@ -209,8 +209,8 @@ namespace TSUT.MappingSystem
                 {
                     float fresh = ComputeLocalFreshCoverage(storage.Grid, contract, cellSize);
                     float radiusKm = contract.Radius / 1000f;
-                    info.AppendLine($"- Know your surroundings ({radiusKm:F0}km)");
-                    info.AppendLine($"   Zone: {radiusKm:F0}km");
+                    string name = !string.IsNullOrEmpty(contract.ContractName) ? contract.ContractName : $"Survey ({radiusKm:F0}km)";
+                    info.AppendLine($"- {name}");
                     info.AppendLine($"   Progress: {fresh * 100f:F0}%");
                 }
             }

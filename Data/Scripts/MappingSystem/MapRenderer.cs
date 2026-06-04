@@ -157,6 +157,7 @@ namespace TSUT.MappingSystem
                             bool inZone = false;
                             foreach (var contract in contracts)
                             {
+                                if (contract.CoverageMet) continue;
                                 if (Vector3D.DistanceSquared(worldPos, contract.Center) <= (double)contract.Radius * contract.Radius)
                                 { inZone = true; break; }
                             }
@@ -187,6 +188,7 @@ namespace TSUT.MappingSystem
             int cellSize = Config.Instance.CellSize;
             foreach (var contract in contracts)
             {
+                if (contract.CoverageMet) continue;
                 // Round-trip through equirectangular grid so the center lies on the sphere surface,
                 // matching how terrain cells are positioned (GridToWorld → WorldToScreen).
                 Vector3D mappedCenter = contract.Center;

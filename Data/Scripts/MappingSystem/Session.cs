@@ -15,7 +15,6 @@ namespace TSUT.MappingSystem
         public List<ClientContractInfo> ClientContracts = new List<ClientContractInfo>();
 
         private int _ticks = 0;
-        private const int SyncIntervalTicks = 300; // Sync every 5 seconds
         private bool _contractSpawnPending = true;
 
         public override void LoadData()
@@ -89,10 +88,7 @@ namespace TSUT.MappingSystem
 
             Contracts?.Update();
 
-            if (++_ticks % SyncIntervalTicks == 0)
-            {
-                PerformRadioSync();
-            }
+            _ticks++;
 
             UpdateVisuals();
         }
