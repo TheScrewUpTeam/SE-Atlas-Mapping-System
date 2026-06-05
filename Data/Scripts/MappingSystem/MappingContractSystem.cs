@@ -120,6 +120,25 @@ namespace TSUT.MappingSystem
             public MyPlanet Planet;
         }
 
+        public void ResetSpawnedContracts()
+        {
+            if (_system == null) return;
+
+            int removed = 0;
+            foreach (var id in _spawnedIds)
+            {
+                if (_system.RemoveContract(id))
+                    removed++;
+                foreach (var h in _handlers)
+                    h.OnSpawnedRemoved(id);
+            }
+            _spawnedIds.Clear();
+            SaveSpawnedIds();
+
+            MyLog.Default.WriteLine($"{Config.LogPrefix} ResetSpawnedContracts: removed {removed} pending contracts");
+            SpawnContractsAtNPCStations();
+        }
+
         public void SpawnContractsAtNPCStations()
         {
             if (_system == null) return;
@@ -405,6 +424,9 @@ namespace TSUT.MappingSystem
 
             if (grids.Count == 0) return 0f;
 
+            Vector3D right, fwd;
+            GetTangentAxes(meta.Center, out right, out fwd);
+
             for (float dx = -meta.Radius; dx <= meta.Radius; dx += cellSize)
             {
                 for (float dz = -meta.Radius; dz <= meta.Radius; dz += cellSize)
@@ -412,7 +434,7 @@ namespace TSUT.MappingSystem
                     if (dx * dx + dz * dz > meta.Radius * meta.Radius) continue;
                     sampled++;
 
-                    var worldPos = meta.Center + new Vector3D(dx, 0, dz);
+                    var worldPos = meta.Center + right * dx + fwd * dz;
                     var cellPos = ProjectionHelper.WorldToGrid(worldPos, cellSize);
 
                     foreach (var grid in grids)
@@ -434,13 +456,16 @@ namespace TSUT.MappingSystem
             int cellSize = Config.Instance.CellSize;
             int sampled = 0, found = 0;
 
+            Vector3D right, fwd;
+            GetTangentAxes(meta.Center, out right, out fwd);
+
             for (float dx = -meta.Radius; dx <= meta.Radius; dx += cellSize)
             {
                 for (float dz = -meta.Radius; dz <= meta.Radius; dz += cellSize)
                 {
                     if (dx * dx + dz * dz > meta.Radius * meta.Radius) continue;
                     sampled++;
-                    var cellPos = ProjectionHelper.WorldToGrid(meta.Center + new Vector3D(dx, 0, dz), cellSize);
+                    var cellPos = ProjectionHelper.WorldToGrid(meta.Center + right * dx + fwd * dz, cellSize);
                     if (grid.GetCell(cellPos) == null) continue;
                     if (grid.GetChunkWrittenTicks(cellPos) < meta.AcceptedTicks) continue;
                     found++;
@@ -598,6 +623,9 @@ namespace TSUT.MappingSystem
             int cellSize = Config.Instance.CellSize;
             int sampled = 0, found = 0;
 
+            Vector3D right, fwd;
+            GetTangentAxes(center, out right, out fwd);
+
             for (float dx = -radius; dx <= radius; dx += cellSize)
             {
                 for (float dz = -radius; dz <= radius; dz += cellSize)
@@ -605,8 +633,7 @@ namespace TSUT.MappingSystem
                     if (dx * dx + dz * dz > radius * radius) continue;
 
                     sampled++;
-                    var worldPos = center + new Vector3D(dx, 0, dz);
-                    var cellPos  = ProjectionHelper.WorldToGrid(worldPos, cellSize);
+                    var cellPos = ProjectionHelper.WorldToGrid(center + right * dx + fwd * dz, cellSize);
 
                     if (grid.GetCell(cellPos) != null)
                         found++;
@@ -614,6 +641,25 @@ namespace TSUT.MappingSystem
             }
 
             return sampled > 0 ? (float)found / sampled : 0f;
+        }
+
+        private static void GetTangentAxes(Vector3D center, out Vector3D right, out Vector3D fwd)
+        {
+            MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(center);
+            if (planet != null)
+            {
+                Vector3D up = Vector3D.Normalize(center - planet.PositionComp.GetPosition());
+                right = Vector3D.Cross(up, Vector3D.Up);
+                if (right.LengthSquared() < 0.001)
+                    right = Vector3D.Cross(up, Vector3D.Forward);
+                right = Vector3D.Normalize(right);
+                fwd = Vector3D.Normalize(Vector3D.Cross(right, up));
+            }
+            else
+            {
+                right = Vector3D.Right;
+                fwd   = Vector3D.Forward;
+            }
         }
 
         private long FindContractBlockId(long stationGridEntityId)

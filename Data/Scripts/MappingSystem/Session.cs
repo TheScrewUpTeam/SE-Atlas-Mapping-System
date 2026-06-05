@@ -54,7 +54,8 @@ namespace TSUT.MappingSystem
 
         private void OnMessageEntered(string messageText, ref bool sendToOthers)
         {
-            if (messageText.Trim().ToLower() != "/mapspawn") return;
+            var cmd = messageText.Trim().ToLower();
+            if (cmd != "/mapspawn" && cmd != "/mapresetcontracts") return;
             sendToOthers = false;
 
             if (!MyAPIGateway.Session.IsUserAdmin(MyAPIGateway.Multiplayer.MyId))
@@ -63,8 +64,16 @@ namespace TSUT.MappingSystem
                 return;
             }
 
-            Contracts?.SpawnContractsAtNPCStations();
-            MyAPIGateway.Utilities.ShowNotification("Checking mapping contracts...", 3000);
+            if (cmd == "/mapresetcontracts")
+            {
+                Contracts?.ResetSpawnedContracts();
+                MyAPIGateway.Utilities.ShowNotification("Pending mapping contracts reset and respawned.", 3000);
+            }
+            else
+            {
+                Contracts?.SpawnContractsAtNPCStations();
+                MyAPIGateway.Utilities.ShowNotification("Checking mapping contracts...", 3000);
+            }
         }
 
         public override void UpdateAfterSimulation()

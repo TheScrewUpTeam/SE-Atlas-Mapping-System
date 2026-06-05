@@ -33,10 +33,17 @@ namespace TSUT.MappingSystem
             double radiusKm = radius / 1000.0;
 
             // Offset survey center so repeat players can't win with their existing map data
+            Vector3D up    = Vector3D.Normalize(stationPos - planet.PositionComp.GetPosition());
+            Vector3D right = Vector3D.Cross(up, Vector3D.Up);
+            if (right.LengthSquared() < 0.001)
+                right = Vector3D.Cross(up, Vector3D.Forward);
+            right = Vector3D.Normalize(right);
+            Vector3D fwd = Vector3D.Normalize(Vector3D.Cross(right, up));
+
             double angle      = MyRandom.Instance.NextDouble() * Math.PI * 2;
             double offsetDist = radius * (0.5 + MyRandom.Instance.NextDouble() * 0.5);
-            Vector3D surveyCenter = stationPos + new Vector3D(
-                Math.Cos(angle) * offsetDist, 0, Math.Sin(angle) * offsetDist);
+            Vector3D candidate    = stationPos + (right * Math.Cos(angle) + fwd * Math.Sin(angle)) * offsetDist;
+            Vector3D surveyCenter = planet.GetClosestSurfacePointGlobal(candidate);
 
             int reward          = (int)(radiusKm * radiusKm * cfg.ContractRewardPerRadiusKm2);
             int reputation      = (int)(radiusKm * cfg.ContractRepPerRadiusKm);
