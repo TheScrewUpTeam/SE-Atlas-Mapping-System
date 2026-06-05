@@ -132,7 +132,7 @@ namespace TSUT.MappingSystem
                 // Sample actual terrain height directly below antenna.
                 // AverageRadius = InnerRadius = minimum hill height, not the real surface.
                 // Using it for sphere intersection fails when antenna altitude < (actual terrain - InnerRadius).
-                Vector3 nadirNominal = (Vector3)(localDown * planet.AverageRadius);
+                Vector3 nadirNominal = (Vector3)(-localDown * planet.AverageRadius);
                 Vector3 nadirSurface = planet.GetClosestSurfacePointLocal(ref nadirNominal);
                 surfaceRadius = nadirSurface.Length();
             }
