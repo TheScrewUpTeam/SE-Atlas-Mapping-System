@@ -35,6 +35,7 @@ namespace TSUT.MappingSystem
     {
         private readonly List<ScanVisual> _activeVisuals = new List<ScanVisual>();
         private readonly MyStringId _material = MyStringId.GetOrCompute("SafeZoneShield_Material");
+        private readonly MyStringId _debugLineMaterial = MyStringId.GetOrCompute("Square");
 
         public void AddScanVisual(Vector3D position, float radius, int durationTicks, long antennaId = 0)
         {
@@ -59,6 +60,16 @@ namespace TSUT.MappingSystem
         private void UpdateVisuals()
         {
             if (MyAPIGateway.Utilities.IsDedicated) return;
+
+            if (ScanScheduler.DebugVisualize && ScanScheduler.DebugRaysList.Count > 0)
+            {
+                var lineMat = _debugLineMaterial;
+                foreach (var ray in ScanScheduler.DebugRaysList)
+                {
+                    var colorVec = (ray.Hit ? Color.Green : Color.White).ToVector4();
+                    MySimpleObjectDraw.DrawLine(ray.From, ray.To, lineMat, ref colorVec, 0.1f);
+                }
+            }
 
             if (_activeVisuals.Count == 0) return;
 

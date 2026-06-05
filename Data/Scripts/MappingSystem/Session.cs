@@ -55,6 +55,24 @@ namespace TSUT.MappingSystem
         private void OnMessageEntered(string messageText, ref bool sendToOthers)
         {
             var cmd = messageText.Trim().ToLower();
+
+            if (cmd == "/mapdebug")
+            {
+                sendToOthers = false;
+                ScanScheduler.DebugVisualize = !ScanScheduler.DebugVisualize;
+                ScanScheduler.DebugRaysList.Clear();
+                MyAPIGateway.Utilities.ShowNotification($"Debug rays: {(ScanScheduler.DebugVisualize ? "ON" : "OFF")}", 3000);
+                return;
+            }
+
+            if (cmd == "/mapdebugnomiss")
+            {
+                sendToOthers = false;
+                ScanScheduler.DebugRaysList.RemoveAll(r => !r.Hit);
+                MyAPIGateway.Utilities.ShowNotification($"Misses removed. {ScanScheduler.DebugRaysList.Count} hits remain.", 3000);
+                return;
+            }
+
             if (cmd != "/mapspawn" && cmd != "/mapresetcontracts") return;
             sendToOthers = false;
 

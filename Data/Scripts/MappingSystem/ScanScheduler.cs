@@ -18,6 +18,13 @@ namespace TSUT.MappingSystem
         public int CurrentRayIndex;
     }
 
+    public struct DebugRay
+    {
+        public Vector3D From;
+        public Vector3D To;
+        public bool Hit;
+    }
+
     public class ScanRequest
     {
         public IMyEntity Antenna;
@@ -30,10 +37,14 @@ namespace TSUT.MappingSystem
         public IMyCubeGrid AntennaCubeGrid;
         public MatrixD GravityRotation;
         public MyPlanet Planet;
+        public float SurfaceRadius; // actual terrain radius below antenna, not AverageRadius (InnerRadius = min hill height)
     }
 
     public class ScanScheduler
     {
+        public static readonly List<DebugRay> DebugRaysList = new List<DebugRay>();
+        public static bool DebugVisualize = false;
+        private const int DebugSampleEvery = 10;
         public event Action<IMyRadioAntenna> ScanCompleted;
 
         private readonly Dictionary<long, ScanInfo> _activeScans = new Dictionary<long, ScanInfo>();
@@ -101,6 +112,7 @@ namespace TSUT.MappingSystem
             MyPlanet planet = MyGamePruningStructure.GetClosestPlanet(pos);
 
             MatrixD gravityRotation = MatrixD.Identity;
+            float surfaceRadius = planet != null ? planet.AverageRadius : 0f;
             if (planet != null)
             {
                 Vector3D localDown = Vector3D.Normalize(planet.PositionComp.GetPosition() - pos);
@@ -116,6 +128,13 @@ namespace TSUT.MappingSystem
                 {
                     gravityRotation = MatrixD.CreateFromAxisAngle(Vector3D.Right, Math.PI);
                 }
+
+                // Sample actual terrain height directly below antenna.
+                // AverageRadius = InnerRadius = minimum hill height, not the real surface.
+                // Using it for sphere intersection fails when antenna altitude < (actual terrain - InnerRadius).
+                Vector3 nadirNominal = (Vector3)(localDown * planet.AverageRadius);
+                Vector3 nadirSurface = planet.GetClosestSurfacePointLocal(ref nadirNominal);
+                surfaceRadius = nadirSurface.Length();
             }
 
             _clientScans.Add(new ScanRequest
@@ -128,7 +147,8 @@ namespace TSUT.MappingSystem
                 LastBatchTick = _ticks,
                 AntennaCubeGrid = antennaCubeGrid,
                 GravityRotation = gravityRotation,
-                Planet = planet
+                Planet = planet,
+                SurfaceRadius = surfaceRadius
             });
         }
 
@@ -290,26 +310,39 @@ namespace TSUT.MappingSystem
             Vector3D dir = new Vector3D(Math.Cos(theta) * radiusAtY, y, Math.Sin(theta) * radiusAtY);
             dir = Vector3D.TransformNormal(dir, request.GravityRotation);
 
+            bool debugSample = DebugVisualize && (request.CurrentRayIndex % DebugSampleEvery == 0);
+
             if (request.Planet != null)
             {
                 Vector3D planetCenter = request.Planet.PositionComp.GetPosition();
                 Vector3D originLocal = request.Position - planetCenter;
 
                 double dotOD = Vector3D.Dot(originLocal, dir);
-                double c = originLocal.LengthSquared() - (double)request.Planet.AverageRadius * request.Planet.AverageRadius;
+                double c = originLocal.LengthSquared() - (double)request.SurfaceRadius * request.SurfaceRadius;
                 double disc = dotOD * dotOD - c;
-                if (disc < 0) return;
+                if (disc < 0)
+                {
+                    if (debugSample) DebugRaysList.Add(new DebugRay { From = request.Position, To = request.Position + dir * request.Radius, Hit = false });
+                    return;
+                }
 
                 double t = -dotOD - Math.Sqrt(disc);
                 if (t < 0) t = -dotOD + Math.Sqrt(disc);
-                if (t < 0 || t > request.Radius) return;
+                if (t < 0 || t > request.Radius)
+                {
+                    if (debugSample) DebugRaysList.Add(new DebugRay { From = request.Position, To = request.Position + dir * request.Radius, Hit = false });
+                    return;
+                }
 
                 Vector3 localNominal = (Vector3)(originLocal + dir * t);
                 Vector3 surfaceLocal = request.Planet.GetClosestSurfacePointLocal(ref localNominal);
                 Vector3D surfaceWorld = planetCenter + (Vector3D)surfaceLocal;
 
                 if (Vector3D.DistanceSquared(surfaceWorld, request.Position) > (double)request.Radius * request.Radius)
+                {
+                    if (debugSample) DebugRaysList.Add(new DebugRay { From = request.Position, To = surfaceWorld, Hit = false });
                     return;
+                }
 
                 Vector3D surfaceUp = Vector3D.Normalize((Vector3D)surfaceLocal);
                 Vector3D losStart = surfaceWorld + surfaceUp * 0.5;
@@ -334,6 +367,8 @@ namespace TSUT.MappingSystem
                     losBlocked = true;
                     break;
                 }
+
+                if (debugSample) DebugRaysList.Add(new DebugRay { From = request.Position, To = surfaceWorld, Hit = !losBlocked });
 
                 if (losBlocked) return;
 
