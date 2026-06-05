@@ -689,8 +689,7 @@ namespace TSUT.MappingSystem
                 {
                     var m = kvp.Value;
                     sb.Append($"{kvp.Key}:{m.Center.X:R},{m.Center.Y:R},{m.Center.Z:R}," +
-                              $"{m.StationCenter.X:R},{m.StationCenter.Y:R},{m.StationCenter.Z:R}," +
-                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.MoneyReward},{m.ReputationReward},{m.AcceptedTicks},{m.SurveyGpsHash};");
+                              $"{m.Radius:R},{m.ContractorIdentityId},{(m.CoverageMet ? 1 : 0)},{m.AcceptedTicks},{m.SurveyGpsHash};");
                 }
                 MyAPIGateway.Utilities.SetVariable(StorageKey, sb.ToString());
             }
@@ -756,89 +755,68 @@ namespace TSUT.MappingSystem
                     if (!long.TryParse(entry.Substring(0, colon), out contractId)) continue;
 
                     var parts = entry.Substring(colon + 1).Split(',');
-                    if (parts.Length != 5 && parts.Length != 8 && parts.Length != 11 && parts.Length != 12 && parts.Length != 13) continue;
 
                     double cx, cy, cz;
-                    if (!double.TryParse(parts[0], out cx) ||
+                    if (parts.Length < 5 ||
+                        !double.TryParse(parts[0], out cx) ||
                         !double.TryParse(parts[1], out cy) ||
                         !double.TryParse(parts[2], out cz)) continue;
 
-                    var center = new Vector3D(cx, cy, cz);
-                    Vector3D stationCenter;
                     float radius;
                     long contractorId;
                     bool coverageMet = false;
-                    int moneyReward = 0, repReward = 0;
                     long acceptedTicks = 0;
                     int gpsHash = 0;
 
-                    if (parts.Length == 5)
+                    if (parts.Length >= 11)
                     {
-                        if (!float.TryParse(parts[3], out radius) ||
-                            !long.TryParse(parts[4], out contractorId)) continue;
-                        stationCenter = center;
+                        // Old format: cx,cy,cz,scx,scy,scz,radius,contractorId,coverageMet,moneyReward,repReward[,acceptedTicks[,gpsHash]]
+                        int cm;
+                        if (!float.TryParse(parts[6], out radius) ||
+                            !long.TryParse(parts[7], out contractorId) ||
+                            !int.TryParse(parts[8], out cm)) continue;
+                        coverageMet = cm != 0;
+                        if (parts.Length >= 12) { long at; if (long.TryParse(parts[11], out at)) acceptedTicks = at; }
+                        if (parts.Length >= 13) { int gh; if (int.TryParse(parts[12], out gh)) gpsHash = gh; }
                     }
                     else if (parts.Length == 8)
                     {
-                        int cm, mr, rr;
+                        // Current format: cx,cy,cz,radius,contractorId,coverageMet,acceptedTicks,gpsHash
+                        int cm;
                         if (!float.TryParse(parts[3], out radius) ||
                             !long.TryParse(parts[4], out contractorId) ||
                             !int.TryParse(parts[5], out cm) ||
-                            !int.TryParse(parts[6], out mr) ||
-                            !int.TryParse(parts[7], out rr)) continue;
-                        stationCenter = center;
-                        coverageMet   = cm != 0;
-                        moneyReward   = mr;
-                        repReward     = rr;
+                            !long.TryParse(parts[6], out acceptedTicks) ||
+                            !int.TryParse(parts[7], out gpsHash)) continue;
+                        coverageMet = cm != 0;
                     }
-                    else // 11, 12, or 13
+                    else if (parts.Length == 5)
                     {
-                        double scx, scy, scz;
-                        int cm, mr, rr;
-                        if (!double.TryParse(parts[3], out scx) ||
-                            !double.TryParse(parts[4], out scy) ||
-                            !double.TryParse(parts[5], out scz) ||
-                            !float.TryParse(parts[6], out radius) ||
-                            !long.TryParse(parts[7], out contractorId) ||
-                            !int.TryParse(parts[8], out cm) ||
-                            !int.TryParse(parts[9], out mr) ||
-                            !int.TryParse(parts[10], out rr)) continue;
-                        stationCenter = new Vector3D(scx, scy, scz);
-                        coverageMet   = cm != 0;
-                        moneyReward   = mr;
-                        repReward     = rr;
-                        if (parts.Length >= 12)
-                        {
-                            long at;
-                            if (long.TryParse(parts[11], out at)) acceptedTicks = at;
-                        }
-                        if (parts.Length >= 13)
-                        {
-                            int gh;
-                            if (int.TryParse(parts[12], out gh)) gpsHash = gh;
-                        }
+                        // Oldest format: cx,cy,cz,radius,contractorId
+                        if (!float.TryParse(parts[3], out radius) ||
+                            !long.TryParse(parts[4], out contractorId)) continue;
                     }
+                    else continue;
 
                     if (!_system.IsContractActive(contractId)) continue;
 
                     var liveContract = _system.GetContractById(contractId) as IMyContract;
-
                     var rawDefId = _system.GetContractDefinitionId(contractId);
                     MappingContractHandler handler = null;
-                    if (rawDefId.HasValue)
-                        _handlerMap.TryGetValue(rawDefId.Value, out handler);
+                    if (rawDefId.HasValue) _handlerMap.TryGetValue(rawDefId.Value, out handler);
 
                     _contracts[contractId] = new MappingContractMeta
                     {
-                        Center               = center,
-                        StationCenter        = stationCenter,
+                        Center               = new Vector3D(cx, cy, cz),
                         Radius               = radius,
                         ContractorIdentityId = contractorId,
                         AcceptedTicks        = acceptedTicks,
                         CoverageMet          = coverageMet,
                         SurveyGpsHash        = gpsHash,
-                        MoneyReward          = moneyReward > 0 ? moneyReward : (liveContract?.MoneyReward ?? 0),
-                        ReputationReward     = repReward > 0 ? repReward : (liveContract?.RewardReputation ?? 0),
+                        StationCenter        = liveContract != null ? GetStationPosition(liveContract) : Vector3D.Zero,
+                        ContractName         = (liveContract as IMyContractCustom)?.Name ?? "Survey",
+                        MoneyReward          = liveContract?.MoneyReward ?? 0,
+                        ReputationReward     = liveContract?.RewardReputation ?? 0,
                         FactionTag           = liveContract != null ? GetFactionTag(liveContract) : "?",
                         Handler              = handler
                     };
