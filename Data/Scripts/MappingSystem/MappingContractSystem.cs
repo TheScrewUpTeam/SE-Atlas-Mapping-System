@@ -38,6 +38,7 @@ namespace TSUT.MappingSystem
         public IMyGps SurveyGps;             // runtime only, not persisted
         public MappingContractHandler Handler; // runtime only, not persisted
         public float LastKnownCoverage;      // runtime only, not persisted
+        public int DurationMinutes;          // runtime only, not persisted
     }
 
     public class MappingContractSystem
@@ -239,10 +240,18 @@ namespace TSUT.MappingSystem
         // ── Update loop ───────────────────────────────────────────────────────────
 
         private int _updateTick;
+        private int _questlogTick;
 
         public void Update()
         {
             if (!MyAPIGateway.Session.IsServer) return;
+
+            if (++_questlogTick % 3600 == 0 && _contracts.Count > 0)
+            {
+                foreach (var kvp in _contracts)
+                    UpdateQuestlogLine(kvp.Key, kvp.Value);
+            }
+
             if (++_updateTick % 60 != 0) return;
 
             if (++_periodicTopUpTimer >= _periodicTopUpInterval)
@@ -300,6 +309,7 @@ namespace TSUT.MappingSystem
 
             meta.Handler = handler;
             meta.AcceptedTicks = DateTime.UtcNow.Ticks;
+            meta.DurationMinutes = contract.Duration;
             meta.ContractName = (contract as IMyContractCustom)?.Name ?? "Survey";
             _contracts[contractId] = meta;
             _spawnedIds.Remove(contractId);
@@ -560,6 +570,7 @@ namespace TSUT.MappingSystem
             {
                 var meta = playerContracts[i].Value;
                 string status = meta.CoverageMet ? "Return to station!" : $"{(int)(meta.LastKnownCoverage * 100)}%";
+                if (!meta.CoverageMet) { var t = FormatTimeLeft(meta); if (t != null) status += $" (Time left: {t})"; }
                 MyVisualScriptLogicProvider.AddQuestlogObjective($"{meta.ContractName} – {status}", false, false, identityId);
                 lineMapping.Add(new KeyValuePair<long, int>(playerContracts[i].Key, i));
             }
@@ -583,10 +594,24 @@ namespace TSUT.MappingSystem
             if (lineIndex < 0) return;
 
             string status = meta.CoverageMet ? "Return to station!" : $"{(int)(meta.LastKnownCoverage * 100)}%";
+            if (!meta.CoverageMet) { var t = FormatTimeLeft(meta); if (t != null) status += $" (Time left: {t})"; }
             MyVisualScriptLogicProvider.ReplaceQuestlogDetail(lineIndex, $"{meta.ContractName} – {status}", false, meta.ContractorIdentityId);
 
             if (meta.CoverageMet)
                 MyVisualScriptLogicProvider.SetQuestlogDetailCompleted(lineIndex, true, meta.ContractorIdentityId);
+        }
+
+        private static string FormatTimeLeft(MappingContractMeta meta)
+        {
+            if (meta.DurationMinutes <= 0 || meta.AcceptedTicks == 0)
+                return null;
+            var deadline = new DateTime(meta.AcceptedTicks, DateTimeKind.Utc).AddMinutes(meta.DurationMinutes);
+            var left = deadline - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero)
+                return "0m left";
+            int h = (int)left.TotalHours;
+            int m = left.Minutes;
+            return h > 0 ? $"{h}h {m}m left" : $"{m}m left";
         }
 
         // ── Helpers (internal so contract handlers can call them) ─────────────────
@@ -815,6 +840,7 @@ namespace TSUT.MappingSystem
                         SurveyGpsHash        = gpsHash,
                         StationCenter        = liveContract != null ? GetStationPosition(liveContract) : Vector3D.Zero,
                         ContractName         = (liveContract as IMyContractCustom)?.Name ?? "Survey",
+                        DurationMinutes      = liveContract?.Duration ?? 0,
                         MoneyReward          = liveContract?.MoneyReward ?? 0,
                         ReputationReward     = liveContract?.RewardReputation ?? 0,
                         FactionTag           = liveContract != null ? GetFactionTag(liveContract) : "?",
