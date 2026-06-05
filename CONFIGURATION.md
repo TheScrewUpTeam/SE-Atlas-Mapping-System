@@ -38,6 +38,7 @@ Power draw during a scan scales with `ScanPowerMultiplierLarge` / `ScanPowerMult
 | `ScanPowerMultiplierLarge` | `5000.0` | Additional power draw multiplier during a scan (large grid). |
 | `MaxRaycastsPerTick` | `50` | Raycasts performed per game tick. Lower = smoother but slower scans. Raise on powerful servers. |
 | `MaxScanPunchThroughs` | `5` | How many overlapping voxel layers (e.g., cave ceilings) a single ray can punch through before stopping. |
+| `ScanOversampleFactor` | `3` | How many extra rays are cast per cell to improve accuracy on rough terrain. Higher = better coverage detection, more CPU per scan. |
 | `PunchThroughOffset` | `0.5` | Distance (meters) to advance the ray origin after a punch-through hit, to avoid self-intersection. |
 
 ---
@@ -71,7 +72,7 @@ duration = radius_km²  × ContractDurationPerRadiusKm2  (minutes)
 | `ContractRadiiMeters` | `[1000, 2000, 3000]` | Pool of survey zone radii (meters) randomly picked when spawning a contract. |
 | `ContractRewardPerRadiusKm2` | `120000.0` | Credits per km² of survey radius. |
 | `ContractRepPerRadiusKm` | `100.0` | Reputation per km of survey radius. |
-| `ContractDurationPerRadiusKm2` | `3.0` | Contract duration (minutes) per km² of survey radius. |
+| `ContractDurationPerRadiusKm2` | `5.0` | Contract duration (minutes) per km² of survey radius. |
 
 ### Remote Survey Contracts
 
@@ -119,6 +120,7 @@ Applied **on top of** the shared reward formula:
   <ScanPowerMultiplierLarge>5000</ScanPowerMultiplierLarge>
   <MaxRaycastsPerTick>50</MaxRaycastsPerTick>
   <MaxScanPunchThroughs>5</MaxScanPunchThroughs>
+  <ScanOversampleFactor>3</ScanOversampleFactor>
   <PunchThroughOffset>0.5</PunchThroughOffset>
   <MarkerUpdateIntervalSeconds>10</MarkerUpdateIntervalSeconds>
   <MaxChunksSmallGrid>20</MaxChunksSmallGrid>
@@ -131,7 +133,7 @@ Applied **on top of** the shared reward formula:
   </ContractRadiiMeters>
   <ContractRewardPerRadiusKm2>120000</ContractRewardPerRadiusKm2>
   <ContractRepPerRadiusKm>100</ContractRepPerRadiusKm>
-  <ContractDurationPerRadiusKm2>3</ContractDurationPerRadiusKm2>
+  <ContractDurationPerRadiusKm2>5</ContractDurationPerRadiusKm2>
   <RemoteRewardPerDistanceKm>15000</RemoteRewardPerDistanceKm>
   <RemoteFailRepPerRadiusKm>50</RemoteFailRepPerRadiusKm>
   <RemoteDurationPerDistanceKm>0.5</RemoteDurationPerDistanceKm>

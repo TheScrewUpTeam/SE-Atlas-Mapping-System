@@ -7,7 +7,7 @@ namespace TSUT.MappingSystem
 {
     public class Config
     {
-        public static readonly string CurrentVersion = "1.0.2";
+        public static readonly string CurrentVersion = "1.1.0";
         public static readonly ushort NetworkId = 54321;
         public static readonly string ConfigFileName = "MappingSystem_Config.xml";
         public static readonly Guid StorageGuid = new Guid("8E373F26-3C72-4742-87C2-79013A63A294");
