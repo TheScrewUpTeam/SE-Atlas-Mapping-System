@@ -37,6 +37,7 @@ namespace TSUT.MappingSystem
 
         private void OnGridDataChanged()
         {
+            _isDirty = true;
             LastActualUpdate = DateTime.Now;
             DataChanged?.Invoke();
         }
@@ -161,6 +162,7 @@ namespace TSUT.MappingSystem
         {
             _isDirty = true;
             LastActualUpdate = DateTime.Now;
+            Save();
             DataChanged?.Invoke();
         }
 
@@ -222,6 +224,8 @@ namespace TSUT.MappingSystem
 
                 string base64 = Convert.ToBase64String(data);
                 Entity.Storage[Config.StorageGuid] = base64;
+                var gridName = (Entity as IMyTerminalBlock)?.CubeGrid?.DisplayName ?? Entity.DisplayName ?? Entity.EntityId.ToString();
+                MyLog.Default.WriteLine($"{Config.LogPrefix} Saved {Grid.CellCount} cells for '{gridName}' (entity {Entity.EntityId})");
             }
             catch (Exception ex)
             {
@@ -245,41 +249,28 @@ namespace TSUT.MappingSystem
 
         public void Load()
         {
-            if (Entity == null)
-            {
+            if (Entity == null || Entity.Storage == null || !Entity.Storage.ContainsKey(Config.StorageGuid))
                 return;
-            }
-
-            if (Entity.Storage == null)
-            {
-                return;
-            }
-
-            if (!Entity.Storage.ContainsKey(Config.StorageGuid))
-            {
-                return;
-            }
 
             try
             {
                 string base64 = Entity.Storage[Config.StorageGuid];
                 if (string.IsNullOrEmpty(base64))
-                {
                     return;
-                }
 
                 byte[] data = Convert.FromBase64String(base64);
                 var grid = MyAPIGateway.Utilities.SerializeFromBinary<MapGrid>(data);
-                
+
                 if (grid != null)
                 {
                     lock (_gridLock)
                     {
                         grid.AfterDeserialize();
-                        
                         Grid = grid;
                         Grid.DataChanged += OnGridDataChanged;
                     }
+                    var gridName = (Entity as IMyTerminalBlock)?.CubeGrid?.DisplayName ?? Entity.DisplayName ?? Entity.EntityId.ToString();
+                    MyLog.Default.WriteLine($"{Config.LogPrefix} Load: Loaded {Grid.CellCount} cells for '{gridName}' (entity {Entity.EntityId})");
                     DataChanged?.Invoke();
                 }
             }
